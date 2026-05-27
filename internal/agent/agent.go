@@ -9,6 +9,7 @@ import (
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/executor"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
+	"github.com/admiral-project/admiral/admirald/pkg/admiral/tlsconfig"
 )
 
 type Agent struct {
@@ -19,7 +20,15 @@ type Agent struct {
 	http        *http.Client
 }
 
-func New(nodeID, apiURL, sharedToken string) *Agent {
+func New(nodeID, apiURL, sharedToken, caCertFile string) (*Agent, error) {
+	if err := tlsconfig.ValidateURLScheme(apiURL, "https"); err != nil {
+		return nil, err
+	}
+	clientTLSConfig, err := tlsconfig.NewClientConfig(caCertFile)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Agent{
 		NodeID:      nodeID,
 		APIURL:      apiURL,
@@ -27,8 +36,11 @@ func New(nodeID, apiURL, sharedToken string) *Agent {
 		executor:    executor.NewSimulated(),
 		http: &http.Client{
 			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: clientTLSConfig,
+			},
 		},
-	}
+	}, nil
 }
 
 func (a *Agent) HandleTask(task admiral.FleetTask) error {

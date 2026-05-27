@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 
@@ -13,8 +14,8 @@ type Consumer struct {
 	ch   *amqp.Channel
 }
 
-func NewConsumer(url string) (*Consumer, error) {
-	conn, err := amqp.Dial(url)
+func NewConsumer(url string, tlsConfig *tls.Config) (*Consumer, error) {
+	conn, err := amqp.DialTLS(url, tlsConfig)
 	if err != nil {
 		return nil, fmt.Errorf("connect rabbitmq: %w", err)
 	}
