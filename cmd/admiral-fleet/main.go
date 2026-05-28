@@ -28,21 +28,22 @@ func main() {
 	defer consumer.Close()
 
 	exec := buildExecutor(cfg)
-	agent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile, cfg.CallbackOutbox, exec)
+	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile, cfg.CallbackOutbox, exec)
 	if err != nil {
 		log.Fatalf("agent configuration error: %v", err)
 	}
 	log.Printf("admiral-fleet started for node %s with executor %s", cfg.NodeID, cfg.Executor)
+	agent.StartHTTPServer(cfg.HTTPAddr, cfg.NodeID, cfg.Executor, cfg.PublicHost, cfg.PublicPort)
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			_ = agent.HandleTask
+			_ = fleetAgent.HandleTask
 		}
 	}()
 
-	if err := consumer.Consume(agent.HandleTask); err != nil {
+	if err := consumer.Consume(fleetAgent.HandleTask); err != nil {
 		log.Fatalf("consumer stopped: %v", err)
 	}
 }
