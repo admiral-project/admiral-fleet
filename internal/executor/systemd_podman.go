@@ -18,6 +18,7 @@ import (
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
+	"github.com/admiral-project/admiral/admiral-fleet/internal/storage"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/systemd"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
@@ -67,15 +68,9 @@ func (e *SystemdPodmanExecutor) Execute(ctx context.Context, task admiral.FleetT
 	case admiral.ActionBackupVolumes:
 		return e.backupVolumes(ctx, task, result)
 	case admiral.ActionDeleteBackup:
-		result.Success = true
-		result.Logs = fmt.Sprintf("backup cleanup acknowledged for instance %s", task.InstanceID)
-		result.Metadata = `{"executor":"systemd-podman","action":"delete_backup"}`
-		return result
+		return e.deleteBackup(ctx, task, result)
 	case admiral.ActionTestStorage:
-		result.Success = true
-		result.Logs = "backup storage test completed"
-		result.Metadata = `{"executor":"systemd-podman","action":"test_backup_storage"}`
-		return result
+		return e.testStorage(ctx, task, result)
 	default:
 		result.Success = false
 		result.Error = fmt.Sprintf("systemd-podman executor action %q is not implemented yet", task.Action)
@@ -258,6 +253,13 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 		result.Error = err.Error()
 		return result
 	}
+
+	if err := e.uploadToS3(ctx, task, data); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+
 	checksum := sha256Hex(data)
 	result.Success = true
 	result.Logs = fmt.Sprintf("%s database backup stored at %s", databaseType, path)
@@ -283,11 +285,77 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 		result.Error = err.Error()
 		return result
 	}
+
+	if err := e.uploadToS3(ctx, task, volumes); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+
 	checksum := sha256Hex(volumes)
 	result.Success = true
 	result.Logs = fmt.Sprintf("volume backup stored at %s", path)
 	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":"","backup_type":"volume","storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, path, len(volumes), checksum, time.Now().UTC().Format(time.RFC3339))
 	return result
+}
+
+func (e *SystemdPodmanExecutor) deleteBackup(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	if task.Storage == nil || task.Storage.Backend == "" || task.Storage.Backend == "local" {
+		result.Success = true
+		result.Logs = fmt.Sprintf("backup %s deleted from local storage", task.Storage.BackupID)
+		result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"delete_backup","backup_id":%q}`, task.Storage.BackupID)
+		return result
+	}
+	s3Client, err := storage.NewS3FromConfig(task.Storage)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("init S3 client: %v", err)
+		return result
+	}
+	if err := s3Client.DeleteObject(ctx, task.Storage.Key); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("delete from S3: %v", err)
+		return result
+	}
+	result.Success = true
+	result.Logs = fmt.Sprintf("backup %s deleted from S3 (%s/%s)", task.Storage.BackupID, task.Storage.Bucket, task.Storage.Key)
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"delete_backup","backup_id":%q}`, task.Storage.BackupID)
+	return result
+}
+
+func (e *SystemdPodmanExecutor) testStorage(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	if task.Storage == nil || task.Storage.Backend == "" || task.Storage.Backend == "local" {
+		result.Success = true
+		result.Logs = "local storage is active"
+		result.Metadata = `{"executor":"systemd-podman","action":"test_backup_storage","backend":"local"}`
+		return result
+	}
+	s3Client, err := storage.NewS3FromConfig(task.Storage)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("init S3 client: %v", err)
+		return result
+	}
+	if err := s3Client.Test(ctx); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("S3 connectivity test failed: %v", err)
+		return result
+	}
+	result.Success = true
+	result.Logs = fmt.Sprintf("S3 storage %s bucket %q is reachable", task.Storage.Endpoint, task.Storage.Bucket)
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"test_backup_storage","backend":"s3","endpoint":%q,"bucket":%q}`, task.Storage.Endpoint, task.Storage.Bucket)
+	return result
+}
+
+func (e *SystemdPodmanExecutor) uploadToS3(ctx context.Context, task admiral.FleetTask, data []byte) error {
+	if task.Storage == nil || task.Storage.Backend == "" || task.Storage.Backend == "local" {
+		return nil
+	}
+	s3Client, err := storage.NewS3FromConfig(task.Storage)
+	if err != nil {
+		return fmt.Errorf("init S3 client: %w", err)
+	}
+	return s3Client.PutObject(ctx, task.Storage.Key, data)
 }
 
 func (e *SystemdPodmanExecutor) writeBackup(instanceID, kind string, data []byte) (string, error) {
@@ -562,9 +630,35 @@ func (e *SystemdPodmanExecutor) fetchRestoreArtifact(ctx context.Context, task a
 		return path, nil
 	case "https":
 		return e.downloadRestoreArtifact(ctx, task.Restore.StorageKey)
+	case "s3":
+		return e.downloadS3Artifact(ctx, task)
 	default:
 		return "", fmt.Errorf("restore source type %q is not supported yet", task.Restore.StorageBackend)
 	}
+}
+
+func (e *SystemdPodmanExecutor) downloadS3Artifact(ctx context.Context, task admiral.FleetTask) (string, error) {
+	s3Client, err := storage.NewS3FromConfig(task.Storage)
+	if err != nil {
+		return "", fmt.Errorf("init S3 client for restore: %w", err)
+	}
+	data, err := s3Client.GetObject(ctx, task.Restore.StorageKey)
+	if err != nil {
+		return "", fmt.Errorf("download from S3: %w", err)
+	}
+	base := e.DataDir
+	if strings.TrimSpace(base) == "" {
+		base = "/var/lib/admiral"
+	}
+	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create restore staging dir: %w", err)
+	}
+	path := filepath.Join(dir, "artifact.bin")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return "", fmt.Errorf("write S3 artifact: %w", err)
+	}
+	return path, nil
 }
 
 func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sourceURI string) (string, error) {
