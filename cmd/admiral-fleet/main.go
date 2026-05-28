@@ -5,6 +5,7 @@ import (
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/agent"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/config"
+	"github.com/admiral-project/admiral/admiral-fleet/internal/executor"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/queue"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral/tlsconfig"
 )
@@ -25,12 +26,22 @@ func main() {
 	}
 	defer consumer.Close()
 
-	agent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile)
+	exec := buildExecutor(cfg)
+	agent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile, exec)
 	if err != nil {
 		log.Fatalf("agent configuration error: %v", err)
 	}
-	log.Printf("admiral-fleet started for node %s", cfg.NodeID)
+	log.Printf("admiral-fleet started for node %s with executor %s", cfg.NodeID, cfg.Executor)
 	if err := consumer.Consume(agent.HandleTask); err != nil {
 		log.Fatalf("consumer stopped: %v", err)
+	}
+}
+
+func buildExecutor(cfg *config.Config) executor.Executor {
+	switch cfg.Executor {
+	case "systemd-podman":
+		return executor.NewSystemdPodman(nil, nil, cfg.QuadletDir, cfg.DataDir)
+	default:
+		return executor.NewSimulated()
 	}
 }

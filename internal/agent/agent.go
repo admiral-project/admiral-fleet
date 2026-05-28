@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,11 +17,11 @@ type Agent struct {
 	NodeID      string
 	APIURL      string
 	SharedToken string
-	executor    *executor.SimulatedExecutor
+	executor    executor.Executor
 	http        *http.Client
 }
 
-func New(nodeID, apiURL, sharedToken, caCertFile string) (*Agent, error) {
+func New(nodeID, apiURL, sharedToken, caCertFile string, exec executor.Executor) (*Agent, error) {
 	if err := tlsconfig.ValidateURLScheme(apiURL, "https"); err != nil {
 		return nil, err
 	}
@@ -33,7 +34,7 @@ func New(nodeID, apiURL, sharedToken, caCertFile string) (*Agent, error) {
 		NodeID:      nodeID,
 		APIURL:      apiURL,
 		SharedToken: sharedToken,
-		executor:    executor.NewSimulated(),
+		executor:    exec,
 		http: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
@@ -44,7 +45,11 @@ func New(nodeID, apiURL, sharedToken, caCertFile string) (*Agent, error) {
 }
 
 func (a *Agent) HandleTask(task admiral.FleetTask) error {
-	result := a.executor.Execute(task, a.NodeID)
+	exec := a.executor
+	if exec == nil {
+		exec = executor.NewSimulated()
+	}
+	result := exec.Execute(context.Background(), task, a.NodeID)
 	return a.Report(result)
 }
 

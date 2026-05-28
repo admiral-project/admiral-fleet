@@ -14,6 +14,9 @@ type Config struct {
 	APIURL         string
 	APICACertFile  string
 	SharedToken    string
+	Executor       string
+	QuadletDir     string
+	DataDir        string
 }
 
 func Load() (*Config, error) {
@@ -24,6 +27,9 @@ func Load() (*Config, error) {
 		APIURL:         getEnv("ADMIRAL_API_URL", "https://127.0.0.1:8080"),
 		APICACertFile:  os.Getenv("ADMIRAL_API_CA_FILE"),
 		SharedToken:    os.Getenv("ADMIRAL_SHARED_TOKEN"),
+		Executor:       getEnv("ADMIRAL_FLEET_EXECUTOR", "simulated"),
+		QuadletDir:     getEnv("ADMIRAL_FLEET_QUADLET_DIR", "/etc/containers/systemd/admiral"),
+		DataDir:        getEnv("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
 	}
 
 	if cfg.NodeID == "" {
@@ -37,6 +43,11 @@ func Load() (*Config, error) {
 	}
 	if err := tlsconfig.ValidateURLScheme(cfg.RabbitMQURL, "amqps"); err != nil {
 		return nil, fmt.Errorf("invalid ADMIRAL_RABBITMQ_URL: %w", err)
+	}
+	switch cfg.Executor {
+	case "simulated", "systemd-podman":
+	default:
+		return nil, fmt.Errorf("invalid ADMIRAL_FLEET_EXECUTOR %q", cfg.Executor)
 	}
 	return cfg, nil
 }

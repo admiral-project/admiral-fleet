@@ -30,6 +30,43 @@ func TestLoadAcceptsSecureURLs(t *testing.T) {
 	if cfg.APIURL != "https://127.0.0.1:8080" {
 		t.Fatalf("expected secure API URL, got %q", cfg.APIURL)
 	}
+	if cfg.Executor != "simulated" {
+		t.Fatalf("expected simulated executor by default, got %q", cfg.Executor)
+	}
+}
+
+func TestLoadAcceptsSystemdPodmanExecutor(t *testing.T) {
+	setEnv(t, "ADMIRAL_FLEET_NODE_ID", "node-1")
+	setEnv(t, "ADMIRAL_SHARED_TOKEN", "token")
+	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
+	setEnv(t, "ADMIRAL_RABBITMQ_URL", "amqps://guest:guest@localhost:5671/")
+	setEnv(t, "ADMIRAL_FLEET_EXECUTOR", "systemd-podman")
+	setEnv(t, "ADMIRAL_FLEET_QUADLET_DIR", "/tmp/quadlet")
+	setEnv(t, "ADMIRAL_FLEET_DATA_DIR", "/tmp/data")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load returned error: %v", err)
+	}
+	if cfg.Executor != "systemd-podman" {
+		t.Fatalf("expected systemd-podman executor, got %q", cfg.Executor)
+	}
+	if cfg.QuadletDir != "/tmp/quadlet" || cfg.DataDir != "/tmp/data" {
+		t.Fatalf("unexpected executor dirs: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsUnknownExecutor(t *testing.T) {
+	setEnv(t, "ADMIRAL_FLEET_NODE_ID", "node-1")
+	setEnv(t, "ADMIRAL_SHARED_TOKEN", "token")
+	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
+	setEnv(t, "ADMIRAL_RABBITMQ_URL", "amqps://guest:guest@localhost:5671/")
+	setEnv(t, "ADMIRAL_FLEET_EXECUTOR", "shell")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for unknown executor")
+	}
 }
 
 func setEnv(t *testing.T, key, value string) {

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"testing"
 
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
@@ -8,7 +9,7 @@ import (
 
 func TestSimulatedExecutorSucceedsForKnownAction(t *testing.T) {
 	exec := NewSimulated()
-	res := exec.Execute(admiral.FleetTask{
+	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
 		OperationID: "op_1",
 		NodeID:      "node_1",
@@ -26,7 +27,7 @@ func TestSimulatedExecutorSucceedsForKnownAction(t *testing.T) {
 
 func TestSimulatedExecutorRejectsWrongNode(t *testing.T) {
 	exec := NewSimulated()
-	res := exec.Execute(admiral.FleetTask{NodeID: "node_2", Action: admiral.ActionProvisionApp}, "node_1")
+	res := exec.Execute(context.Background(), admiral.FleetTask{NodeID: "node_2", Action: admiral.ActionProvisionApp}, "node_1")
 	if res.Success {
 		t.Fatal("expected wrong node to fail")
 	}
@@ -34,7 +35,7 @@ func TestSimulatedExecutorRejectsWrongNode(t *testing.T) {
 
 func TestSimulatedExecutorRejectsUnknownAction(t *testing.T) {
 	exec := NewSimulated()
-	res := exec.Execute(admiral.FleetTask{NodeID: "node_1", Action: admiral.TaskAction("bad_action")}, "node_1")
+	res := exec.Execute(context.Background(), admiral.FleetTask{NodeID: "node_1", Action: admiral.TaskAction("bad_action")}, "node_1")
 	if res.Success {
 		t.Fatal("expected unknown action to fail")
 	}

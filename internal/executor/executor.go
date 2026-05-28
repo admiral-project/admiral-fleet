@@ -1,10 +1,15 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
+
+type Executor interface {
+	Execute(ctx context.Context, task admiral.FleetTask, nodeID string) admiral.TaskResult
+}
 
 type SimulatedExecutor struct{}
 
@@ -12,7 +17,7 @@ func NewSimulated() *SimulatedExecutor {
 	return &SimulatedExecutor{}
 }
 
-func (e *SimulatedExecutor) Execute(task admiral.FleetTask, nodeID string) admiral.TaskResult {
+func (e *SimulatedExecutor) Execute(ctx context.Context, task admiral.FleetTask, nodeID string) admiral.TaskResult {
 	result := admiral.TaskResult{
 		TaskID:      task.TaskID,
 		OperationID: task.OperationID,
