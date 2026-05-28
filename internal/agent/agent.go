@@ -19,9 +19,10 @@ type Agent struct {
 	SharedToken string
 	executor    executor.Executor
 	http        *http.Client
+	outbox      *outbox
 }
 
-func New(nodeID, apiURL, sharedToken, caCertFile string, exec executor.Executor) (*Agent, error) {
+func New(nodeID, apiURL, sharedToken, caCertFile, outboxDir string, exec executor.Executor) (*Agent, error) {
 	if err := tlsconfig.ValidateURLScheme(apiURL, "https"); err != nil {
 		return nil, err
 	}
@@ -41,19 +42,32 @@ func New(nodeID, apiURL, sharedToken, caCertFile string, exec executor.Executor)
 				TLSClientConfig: clientTLSConfig,
 			},
 		},
+		outbox: newOutbox(outboxDir),
 	}, nil
 }
 
 func (a *Agent) HandleTask(task admiral.FleetTask) error {
+	if a.outbox != nil {
+		_ = a.outbox.flush(a.send)
+	}
 	exec := a.executor
 	if exec == nil {
 		exec = executor.NewSimulated()
 	}
 	result := exec.Execute(context.Background(), task, a.NodeID)
-	return a.Report(result)
+	if err := a.send(result); err != nil {
+		if a.outbox != nil {
+			_ = a.outbox.enqueue(result)
+		}
+		return err
+	}
+	if a.outbox != nil {
+		_ = a.outbox.flush(a.send)
+	}
+	return nil
 }
 
-func (a *Agent) Report(result admiral.TaskResult) error {
+func (a *Agent) send(result admiral.TaskResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("encode task result: %w", err)

@@ -17,6 +17,7 @@ type Config struct {
 	Executor       string
 	QuadletDir     string
 	DataDir        string
+	CallbackOutbox string
 }
 
 func Load() (*Config, error) {
@@ -30,6 +31,7 @@ func Load() (*Config, error) {
 		Executor:       getEnv("ADMIRAL_FLEET_EXECUTOR", "simulated"),
 		QuadletDir:     getEnv("ADMIRAL_FLEET_QUADLET_DIR", "/etc/containers/systemd/admiral"),
 		DataDir:        getEnv("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
+		CallbackOutbox: getEnv("ADMIRAL_FLEET_CALLBACK_OUTBOX", "/var/lib/admiral/outbox"),
 	}
 
 	if cfg.NodeID == "" {

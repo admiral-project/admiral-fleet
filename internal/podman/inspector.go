@@ -34,10 +34,7 @@ type Inspector struct {
 }
 
 func NewInspector(runner Runner) *Inspector {
-	return &Inspector{
-		Runner:  runner,
-		Timeout: 30 * time.Second,
-	}
+	return &Inspector{Runner: runner, Timeout: 30 * time.Second}
 }
 
 func (i *Inspector) PodExists(ctx context.Context, podName string) error {
@@ -51,6 +48,23 @@ func (i *Inspector) PodPS(ctx context.Context) ([]byte, error) {
 
 func (i *Inspector) ContainerPS(ctx context.Context) ([]byte, error) {
 	return i.run(ctx, "ps", "--format", "json")
+}
+
+func (i *Inspector) ContainerInspect(ctx context.Context, container string) ([]byte, error) {
+	return i.run(ctx, "container", "inspect", container, "--format", "json")
+}
+
+func (i *Inspector) VolumeInspect(ctx context.Context, volume string) ([]byte, error) {
+	return i.run(ctx, "volume", "inspect", volume, "--format", "json")
+}
+
+func (i *Inspector) Exec(ctx context.Context, container string, args ...string) ([]byte, error) {
+	cmdArgs := append([]string{"exec", container}, args...)
+	return i.run(ctx, cmdArgs...)
+}
+
+func (i *Inspector) CopyToContainer(ctx context.Context, sourcePath, containerPath string) ([]byte, error) {
+	return i.run(ctx, "cp", sourcePath, containerPath)
 }
 
 func (i *Inspector) RemovePod(ctx context.Context, podName string) error {

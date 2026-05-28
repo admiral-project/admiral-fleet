@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/agent"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/config"
@@ -27,11 +28,20 @@ func main() {
 	defer consumer.Close()
 
 	exec := buildExecutor(cfg)
-	agent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile, exec)
+	agent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile, cfg.CallbackOutbox, exec)
 	if err != nil {
 		log.Fatalf("agent configuration error: %v", err)
 	}
 	log.Printf("admiral-fleet started for node %s with executor %s", cfg.NodeID, cfg.Executor)
+
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			_ = agent.HandleTask
+		}
+	}()
+
 	if err := consumer.Consume(agent.HandleTask); err != nil {
 		log.Fatalf("consumer stopped: %v", err)
 	}

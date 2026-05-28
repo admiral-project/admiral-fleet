@@ -3,9 +3,11 @@ package executor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/systemd"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
@@ -22,6 +24,29 @@ func (r *fakeSystemdRunner) Run(ctx context.Context, name string, args ...string
 		return nil, r.err
 	}
 	return []byte("ok"), nil
+}
+
+type fakePodmanRunner struct {
+	calls [][]string
+}
+
+func (r *fakePodmanRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	call := append([]string{name}, args...)
+	r.calls = append(r.calls, call)
+	switch strings.Join(call, " ") {
+	case "podman pod exists admiral-demo001":
+		return []byte{}, nil
+	case "podman pod ps --format json":
+		return []byte(`[{"Name":"admiral-demo001","Status":"Running"}]`), nil
+	case "podman ps --format json":
+		return []byte(`[{"Names":["admiral-demo001-app"],"Status":"Up"}]`), nil
+	case "podman container inspect admiral-demo001-app --format json":
+		return []byte(`[{"Name":"admiral-demo001-app","State":{"Status":"running"}}]`), nil
+	case "podman volume inspect admiral-demo001-db --format json":
+		return []byte(`[{"Name":"admiral-demo001-db","Mountpoint":"/var/lib/containers/storage/volumes/admiral-demo001-db/_data"}]`), nil
+	default:
+		return []byte(`[]`), nil
+	}
 }
 
 func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
@@ -45,7 +70,7 @@ func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 		t.Fatalf("expected one systemd call, got %d", len(runner.calls))
 	}
 	got := runner.calls[0]
-	want := []string{"systemctl", "start", "admiral-demo001-app.service"}
+	want := []string{"systemctl", "start", "admiral-demo001-pod-pod.service"}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected call length: got %#v want %#v", got, want)
 	}
@@ -88,5 +113,36 @@ func TestSystemdPodmanExecutorRejectsInvalidProvision(t *testing.T) {
 
 	if res.Success {
 		t.Fatal("expected invalid provision to fail clearly")
+	}
+}
+
+func TestSystemdPodmanExecutorInspectAppSnapshot(t *testing.T) {
+	podmanRunner := &fakePodmanRunner{}
+	systemdRunner := &fakeSystemdRunner{}
+	exec := NewSystemdPodman(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "", "")
+
+	res := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:      "task_1",
+		OperationID: "op_1",
+		NodeID:      "node_1",
+		Action:      admiral.ActionInspectApp,
+		InstanceID:  "demo001",
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "example.com/app:1"},
+			{Name: "db", Image: "docker.io/library/postgres:16", Volume: "db_data"},
+		},
+	}, "node_1")
+
+	if !res.Success {
+		t.Fatalf("expected inspect to succeed, got %q", res.Error)
+	}
+	if !strings.Contains(res.Metadata, `"instance_id":"demo001"`) {
+		t.Fatalf("expected instance id in metadata, got %s", res.Metadata)
+	}
+	if !strings.Contains(res.Metadata, `"containers"`) {
+		t.Fatalf("expected containers in metadata, got %s", res.Metadata)
+	}
+	if len(podmanRunner.calls) == 0 {
+		t.Fatal("expected podman calls")
 	}
 }

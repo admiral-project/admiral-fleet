@@ -51,7 +51,12 @@ func isAllowedAction(action admiral.TaskAction) bool {
 		admiral.ActionResumeApp,
 		admiral.ActionResizeApp,
 		admiral.ActionDeprovisionApp,
-		admiral.ActionBackupDatabase:
+		admiral.ActionBackupDatabase,
+		admiral.ActionBackupVolumes,
+		admiral.ActionInspectApp,
+		admiral.ActionDeleteBackup,
+		admiral.ActionTestStorage,
+		admiral.ActionRestoreBackup:
 		return true
 	default:
 		return false

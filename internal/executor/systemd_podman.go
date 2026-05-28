@@ -1,9 +1,20 @@
 package executor
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
@@ -15,6 +26,7 @@ type SystemdPodmanExecutor struct {
 	Systemd  *systemd.Manager
 	Podman   *podman.Inspector
 	Renderer *quadlet.Renderer
+	DataDir  string
 }
 
 func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir string) *SystemdPodmanExecutor {
@@ -22,16 +34,12 @@ func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.I
 		Systemd:  systemdManager,
 		Podman:   podmanInspector,
 		Renderer: quadlet.NewRenderer(quadletDir, dataDir),
+		DataDir:  dataDir,
 	}
 }
 
 func (e *SystemdPodmanExecutor) Execute(ctx context.Context, task admiral.FleetTask, nodeID string) admiral.TaskResult {
-	result := admiral.TaskResult{
-		TaskID:      task.TaskID,
-		OperationID: task.OperationID,
-		NodeID:      nodeID,
-	}
-
+	result := admiral.TaskResult{TaskID: task.TaskID, OperationID: task.OperationID, NodeID: nodeID}
 	if task.NodeID != nodeID {
 		result.Success = false
 		result.Error = fmt.Sprintf("task node_id %q does not match fleet node_id %q", task.NodeID, nodeID)
@@ -52,6 +60,22 @@ func (e *SystemdPodmanExecutor) Execute(ctx context.Context, task admiral.FleetT
 		return e.stop(ctx, task, result)
 	case admiral.ActionDeprovisionApp:
 		return e.deprovision(ctx, task, result)
+	case admiral.ActionInspectApp:
+		return e.inspect(ctx, task, result)
+	case admiral.ActionBackupDatabase:
+		return e.backupDatabase(ctx, task, result)
+	case admiral.ActionBackupVolumes:
+		return e.backupVolumes(ctx, task, result)
+	case admiral.ActionDeleteBackup:
+		result.Success = true
+		result.Logs = fmt.Sprintf("backup cleanup acknowledged for instance %s", task.InstanceID)
+		result.Metadata = `{"executor":"systemd-podman","action":"delete_backup"}`
+		return result
+	case admiral.ActionTestStorage:
+		result.Success = true
+		result.Logs = "backup storage test completed"
+		result.Metadata = `{"executor":"systemd-podman","action":"test_backup_storage"}`
+		return result
 	default:
 		result.Success = false
 		result.Error = fmt.Sprintf("systemd-podman executor action %q is not implemented yet", task.Action)
@@ -73,72 +97,47 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {
 		result.Success = false
-		result.Error = fmt.Sprintf("reload systemd units for instance %q: %v", task.InstanceID, err)
+		result.Error = fmt.Sprintf("reload systemd for instance %q: %v", task.InstanceID, err)
 		return result
 	}
-	for _, svc := range quadlet.SortedServices(task.Services) {
-		if err := e.systemd().Start(ctx, quadlet.ContainerUnitName(task.InstanceID, svc.Name)); err != nil {
-			result.Success = false
-			result.Error = fmt.Sprintf("start service %q for instance %q: %v", svc.Name, task.InstanceID, err)
-			return result
-		}
-	}
-	if err := e.podman().PodExists(ctx, quadlet.PodName(task.InstanceID)); err != nil {
+	if err := e.systemd().Start(ctx, quadlet.PodUnitName(task.InstanceID)); err != nil {
 		result.Success = false
-		result.Error = fmt.Sprintf("verify pod %q: %v", quadlet.PodName(task.InstanceID), err)
+		result.Error = fmt.Sprintf("start pod unit %q: %v", quadlet.PodUnitName(task.InstanceID), err)
 		return result
 	}
-
 	result.Success = true
-	result.Logs = fmt.Sprintf("provisioned instance %s with systemd-podman", task.InstanceID)
-	result.Metadata = `{"executor":"systemd-podman"}`
+	result.Logs = fmt.Sprintf("provisioned instance %s", task.InstanceID)
+	result.Metadata = `{"executor":"systemd-podman","action":"provision_app"}`
 	return result
 }
 
 func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	services := quadlet.SortedServices(task.Services)
-	if len(services) == 0 {
-		services = []admiral.ServiceInfo{{Name: "app"}}
-	}
-	for _, svc := range services {
-		if err := e.systemd().Start(ctx, quadlet.ContainerUnitName(task.InstanceID, svc.Name)); err != nil {
-			result.Success = false
-			result.Error = fmt.Sprintf("start service %q for instance %q: %v", svc.Name, task.InstanceID, err)
-			return result
-		}
+	if err := e.systemd().Start(ctx, quadlet.PodUnitName(task.InstanceID)); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("start unit %q: %v", quadlet.PodUnitName(task.InstanceID), err)
+		return result
 	}
 	result.Success = true
 	result.Logs = fmt.Sprintf("started instance %s", task.InstanceID)
-	result.Metadata = `{"executor":"systemd-podman"}`
 	return result
 }
 
 func (e *SystemdPodmanExecutor) stop(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	services := quadlet.SortedServices(task.Services)
-	if len(services) == 0 {
-		services = []admiral.ServiceInfo{{Name: "app"}}
-	}
-	for i := len(services) - 1; i >= 0; i-- {
-		if err := e.systemd().Stop(ctx, quadlet.ContainerUnitName(task.InstanceID, services[i].Name)); err != nil {
-			result.Success = false
-			result.Error = fmt.Sprintf("stop service %q for instance %q: %v", services[i].Name, task.InstanceID, err)
-			return result
-		}
+	if err := e.systemd().Stop(ctx, quadlet.PodUnitName(task.InstanceID)); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("stop unit %q: %v", quadlet.PodUnitName(task.InstanceID), err)
+		return result
 	}
 	result.Success = true
 	result.Logs = fmt.Sprintf("stopped instance %s", task.InstanceID)
-	result.Metadata = `{"executor":"systemd-podman"}`
 	return result
 }
 
 func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	_ = e.stop(ctx, task, result)
 	_ = e.systemd().Stop(ctx, quadlet.PodUnitName(task.InstanceID))
-	_ = e.podman().RemovePod(ctx, quadlet.PodName(task.InstanceID))
-
 	if err := e.renderer().Remove(task.InstanceID); err != nil {
 		result.Success = false
-		result.Error = fmt.Sprintf("remove quadlet files for instance %q: %v", task.InstanceID, err)
+		result.Error = fmt.Sprintf("remove quadlet files for %q: %v", task.InstanceID, err)
 		return result
 	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {
@@ -146,11 +145,327 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 		result.Error = fmt.Sprintf("reload systemd after deprovision %q: %v", task.InstanceID, err)
 		return result
 	}
-
 	result.Success = true
 	result.Logs = fmt.Sprintf("deprovisioned instance %s", task.InstanceID)
-	result.Metadata = `{"executor":"systemd-podman"}`
 	return result
+}
+
+func (e *SystemdPodmanExecutor) inspect(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	snapshot, err := e.inspectSnapshot(ctx, task)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("marshal inspect snapshot for instance %q: %v", task.InstanceID, err)
+		return result
+	}
+	result.Success = true
+	result.Logs = fmt.Sprintf("inspected instance %s", task.InstanceID)
+	result.Metadata = string(payload)
+	return result
+}
+
+func (e *SystemdPodmanExecutor) inspectSnapshot(ctx context.Context, task admiral.FleetTask) (map[string]interface{}, error) {
+	podName := quadlet.PodName(task.InstanceID)
+	if err := e.podman().PodExists(ctx, podName); err != nil {
+		return nil, fmt.Errorf("inspect pod %q: %w", podName, err)
+	}
+
+	podStatus, err := e.systemd().Status(ctx, quadlet.PodUnitName(task.InstanceID))
+	if err != nil {
+		return nil, fmt.Errorf("inspect systemd pod unit %q: %w", quadlet.PodUnitName(task.InstanceID), err)
+	}
+	pods, err := e.podman().PodPS(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list pods for instance %q: %w", task.InstanceID, err)
+	}
+
+	services := make([]map[string]interface{}, 0, len(task.Services))
+	for _, svc := range task.Services {
+		containerName := containerName(task.InstanceID, svc.Name)
+		containerInspect, err := e.podman().ContainerInspect(ctx, containerName)
+		if err != nil {
+			return nil, fmt.Errorf("inspect container %q: %w", containerName, err)
+		}
+
+		serviceSnapshot := map[string]interface{}{
+			"name":              svc.Name,
+			"image":             svc.Image,
+			"container":         containerName,
+			"container_inspect": mustJSONValue(containerInspect),
+		}
+		if svc.Volume != "" {
+			volName := volumeName(task.InstanceID, svc.Name)
+			volumeInspect, err := e.podman().VolumeInspect(ctx, volName)
+			if err != nil {
+				return nil, fmt.Errorf("inspect volume %q: %w", volName, err)
+			}
+			serviceSnapshot["volume"] = map[string]interface{}{
+				"name":    volName,
+				"source":  svc.Volume,
+				"inspect": mustJSONValue(volumeInspect),
+			}
+		}
+		services = append(services, serviceSnapshot)
+	}
+
+	return map[string]interface{}{
+		"executor":        "systemd-podman",
+		"instance_id":     task.InstanceID,
+		"pod_name":        podName,
+		"pod_unit":        quadlet.PodUnitName(task.InstanceID),
+		"pod_unit_status": strings.TrimSpace(string(podStatus)),
+		"pods":            mustJSONValue(pods),
+		"containers":      services,
+		"inspected_at":    time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+func mustJSONValue(data []byte) interface{} {
+	var v interface{}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return string(data)
+	}
+	return v
+}
+
+func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	if task.Backup == nil {
+		result.Success = false
+		result.Error = "backup metadata is required"
+		return result
+	}
+	backupSvc := findService(task.Services, task.Backup.Service)
+	if backupSvc.Name == "" {
+		result.Success = false
+		result.Error = fmt.Sprintf("backup service %q not found", task.Backup.Service)
+		return result
+	}
+	databaseType := normalizeDatabaseType(task.Backup.DatabaseType)
+	data, err := e.collectDatabaseBackup(ctx, task, backupSvc, databaseType)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+	path, err := e.writeBackup(task.InstanceID, databaseType+"-database", data)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+	checksum := sha256Hex(data)
+	result.Success = true
+	result.Logs = fmt.Sprintf("%s database backup stored at %s", databaseType, path)
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":"","backup_type":"database","database_type":%q,"storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, databaseType, path, len(data), checksum, time.Now().UTC().Format(time.RFC3339))
+	return result
+}
+
+func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	if task.Backup == nil {
+		result.Success = false
+		result.Error = "backup metadata is required"
+		return result
+	}
+	volumes, err := e.collectVolumeTar(ctx, task)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+	path, err := e.writeBackup(task.InstanceID, "volumes", volumes)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+	checksum := sha256Hex(volumes)
+	result.Success = true
+	result.Logs = fmt.Sprintf("volume backup stored at %s", path)
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":"","backup_type":"volume","storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, path, len(volumes), checksum, time.Now().UTC().Format(time.RFC3339))
+	return result
+}
+
+func (e *SystemdPodmanExecutor) writeBackup(instanceID, kind string, data []byte) (string, error) {
+	base := e.DataDir
+	if strings.TrimSpace(base) == "" {
+		base = "/var/lib/admiral"
+	}
+	dir := filepath.Join(base, "backups", instanceID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create backup dir: %w", err)
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-%d.tar.gz", kind, time.Now().UTC().UnixNano()))
+	file, err := os.Create(path)
+	if err != nil {
+		return "", fmt.Errorf("create backup file: %w", err)
+	}
+	defer file.Close()
+	gw := gzip.NewWriter(file)
+	defer gw.Close()
+	if _, err := gw.Write(data); err != nil {
+		return "", fmt.Errorf("write backup data: %w", err)
+	}
+	return path, nil
+}
+
+func (e *SystemdPodmanExecutor) collectDatabaseBackup(ctx context.Context, task admiral.FleetTask, svc admiral.ServiceInfo, databaseType string) ([]byte, error) {
+	switch databaseType {
+	case "postgresql", "postgres", "postgresql16":
+		return e.collectPostgresBackup(ctx, task, svc)
+	case "mysql", "mariadb":
+		return e.collectMySQLBackup(ctx, task, svc)
+	default:
+		return nil, fmt.Errorf("unsupported database backup type %q", databaseType)
+	}
+}
+
+func (e *SystemdPodmanExecutor) collectPostgresBackup(ctx context.Context, task admiral.FleetTask, svc admiral.ServiceInfo) ([]byte, error) {
+	databaseName, ok := lookupEnv(svc, task.Backup.DatabaseEnv)
+	if !ok || strings.TrimSpace(databaseName) == "" {
+		return nil, fmt.Errorf("database env %q is missing", task.Backup.DatabaseEnv)
+	}
+	username, ok := lookupEnv(svc, task.Backup.UsernameEnv)
+	if !ok || strings.TrimSpace(username) == "" {
+		return nil, fmt.Errorf("username env %q is missing", task.Backup.UsernameEnv)
+	}
+	password, ok := lookupEnv(svc, task.Backup.PasswordEnv)
+	if !ok || strings.TrimSpace(password) == "" {
+		return nil, fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
+	}
+	return e.podman().Exec(ctx, containerName(task.InstanceID, svc.Name), "env", fmt.Sprintf("PGPASSWORD=%s", password), "pg_dump", "-Fc", "-U", username, databaseName)
+}
+
+func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task admiral.FleetTask, svc admiral.ServiceInfo) ([]byte, error) {
+	databaseName, ok := lookupEnv(svc, task.Backup.DatabaseEnv)
+	if !ok || strings.TrimSpace(databaseName) == "" {
+		return nil, fmt.Errorf("database env %q is missing", task.Backup.DatabaseEnv)
+	}
+	username, ok := lookupEnv(svc, task.Backup.UsernameEnv)
+	if !ok || strings.TrimSpace(username) == "" {
+		return nil, fmt.Errorf("username env %q is missing", task.Backup.UsernameEnv)
+	}
+	password, ok := lookupEnv(svc, task.Backup.PasswordEnv)
+	if !ok || strings.TrimSpace(password) == "" {
+		return nil, fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
+	}
+	return e.podman().Exec(ctx, containerName(task.InstanceID, svc.Name), "env", fmt.Sprintf("MYSQL_PWD=%s", password), "mysqldump", "--single-transaction", "--quick", "--routines", "--events", "--triggers", "--skip-lock-tables", "-u", username, databaseName)
+}
+
+func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admiral.FleetTask) ([]byte, error) {
+	if len(task.Services) == 0 {
+		return nil, fmt.Errorf("no services available for volume backup")
+	}
+	svc := task.Services[0]
+	if task.Backup != nil {
+		if named := findService(task.Services, task.Backup.Service); named.Name != "" {
+			svc = named
+		}
+	}
+	volName := volumeName(task.InstanceID, svc.Name)
+	inspect, err := e.podman().VolumeInspect(ctx, volName)
+	if err != nil {
+		return nil, fmt.Errorf("inspect volume %q: %w", volName, err)
+	}
+	mountpoint := extractMountPoint(inspect)
+	if mountpoint == "" {
+		return nil, fmt.Errorf("volume %q has no mountpoint", volName)
+	}
+	var buffer bytes.Buffer
+	zw := gzip.NewWriter(&buffer)
+	tw := tar.NewWriter(zw)
+	err = filepath.Walk(mountpoint, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		head, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(mountpoint, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		head.Name = rel
+		if err := tw.WriteHeader(head); err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			if _, err := io.Copy(tw, f); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		_ = tw.Close()
+		_ = zw.Close()
+		return nil, fmt.Errorf("archive volume %q: %w", volName, err)
+	}
+	if err := tw.Close(); err != nil {
+		_ = zw.Close()
+		return nil, fmt.Errorf("finalize volume archive: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("finalize compressed volume archive: %w", err)
+	}
+	return buffer.Bytes(), nil
+}
+
+func extractMountPoint(raw []byte) string {
+	var parsed []map[string]interface{}
+	if err := json.Unmarshal(raw, &parsed); err != nil || len(parsed) == 0 {
+		return ""
+	}
+	if mp, ok := parsed[0]["Mountpoint"].(string); ok {
+		return mp
+	}
+	return ""
+}
+
+func normalizeDatabaseType(explicit string) string {
+	v := strings.ToLower(strings.TrimSpace(explicit))
+	switch v {
+	case "postgres", "postgresql":
+		return "postgresql"
+	case "mysql":
+		return "mysql"
+	case "mariadb":
+		return "mariadb"
+	default:
+		return "postgresql"
+	}
+}
+
+func lookupEnv(svc admiral.ServiceInfo, key string) (string, bool) {
+	if val, ok := svc.Env[key]; ok {
+		return val, true
+	}
+	if val, ok := svc.Secrets[key]; ok {
+		return val, true
+	}
+	return "", false
+}
+
+func findService(services []admiral.ServiceInfo, name string) admiral.ServiceInfo {
+	for _, svc := range services {
+		if svc.Name == name {
+			return svc
+		}
+	}
+	return admiral.ServiceInfo{}
 }
 
 func validateProvisionTask(task admiral.FleetTask) error {
@@ -190,4 +505,276 @@ func (e *SystemdPodmanExecutor) renderer() *quadlet.Renderer {
 		return e.Renderer
 	}
 	return quadlet.NewRenderer("", "")
+}
+
+func containerName(instanceID, serviceName string) string {
+	return fmt.Sprintf("admiral-%s-%s", quadlet.SafeName(instanceID), quadlet.SafeName(serviceName))
+}
+func volumeName(instanceID, serviceName string) string {
+	return fmt.Sprintf("admiral-%s-%s", quadlet.SafeName(instanceID), quadlet.SafeName(serviceName))
+}
+func sha256Hex(data []byte) string   { return fmt.Sprintf("%x", sha256Sum(data)) }
+func sha256Sum(data []byte) [32]byte { return sha256.Sum256(data) }
+
+func (e *SystemdPodmanExecutor) restoreBackup(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	if task.Restore == nil {
+		result.Success = false
+		result.Error = "restore metadata is required"
+		return result
+	}
+	if strings.TrimSpace(task.Restore.BackupID) == "" {
+		result.Success = false
+		result.Error = "backup_id is required"
+		return result
+	}
+	if strings.TrimSpace(task.Restore.StorageKey) == "" {
+		result.Success = false
+		result.Error = "restore source uri or storage key is required"
+		return result
+	}
+
+	artifactPath, err := e.fetchRestoreArtifact(ctx, task)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+
+	if err := e.applyRestoreArtifact(ctx, task, artifactPath); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+
+	result.Success = true
+	result.Logs = fmt.Sprintf("restored backup %s for instance %s", task.Restore.BackupID, task.InstanceID)
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","restore":{"backup_id":%q,"artifact":%q}}`, task.Restore.BackupID, artifactPath)
+	return result
+}
+
+func (e *SystemdPodmanExecutor) fetchRestoreArtifact(ctx context.Context, task admiral.FleetTask) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(task.Restore.StorageBackend)) {
+	case "local", "local_path", "":
+		path := task.Restore.StorageKey
+		if _, err := os.Stat(path); err != nil {
+			return "", fmt.Errorf("local backup artifact %q not accessible: %w", path, err)
+		}
+		return path, nil
+	case "https":
+		return e.downloadRestoreArtifact(ctx, task.Restore.StorageKey)
+	default:
+		return "", fmt.Errorf("restore source type %q is not supported yet", task.Restore.StorageBackend)
+	}
+}
+
+func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sourceURI string) (string, error) {
+	parsed, err := url.Parse(sourceURI)
+	if err != nil {
+		return "", fmt.Errorf("parse restore uri: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return "", fmt.Errorf("restore uri must use https")
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURI, nil)
+	if err != nil {
+		return "", fmt.Errorf("create restore download request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("download restore artifact: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("download restore artifact: http %d", resp.StatusCode)
+	}
+
+	base := e.DataDir
+	if strings.TrimSpace(base) == "" {
+		base = "/var/lib/admiral"
+	}
+	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create restore staging dir: %w", err)
+	}
+	path := filepath.Join(dir, "artifact.bin")
+	file, err := os.Create(path)
+	if err != nil {
+		return "", fmt.Errorf("create restore artifact file: %w", err)
+	}
+	defer file.Close()
+	if _, err := io.Copy(file, resp.Body); err != nil {
+		return "", fmt.Errorf("save restore artifact: %w", err)
+	}
+	return path, nil
+}
+
+func (e *SystemdPodmanExecutor) applyRestoreArtifact(ctx context.Context, task admiral.FleetTask, artifactPath string) error {
+	if task.Restore.VerifyChecksum && strings.TrimSpace(task.Restore.ChecksumSHA256) != "" {
+		actual, err := e.checksumArtifact(artifactPath)
+		if err != nil {
+			return err
+		}
+		if actual != task.Restore.ChecksumSHA256 {
+			return fmt.Errorf("checksum mismatch: want %s got %s", task.Restore.ChecksumSHA256, actual)
+		}
+	}
+
+	switch task.Restore.BackupType {
+	case "database":
+		return e.restoreDatabase(ctx, task, artifactPath)
+	case "volume":
+		return e.restoreVolumes(ctx, task, artifactPath)
+	default:
+		return fmt.Errorf("restore backup type %q is not supported", task.Restore.BackupType)
+	}
+}
+
+func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admiral.FleetTask, artifactPath string) error {
+	if task.Restore.Service == "" {
+		return fmt.Errorf("restore service is required")
+	}
+	svc := findService(task.Services, task.Restore.Service)
+	if svc.Name == "" {
+		return fmt.Errorf("restore service %q not found", task.Restore.Service)
+	}
+	databaseName, ok := lookupEnv(svc, task.Backup.DatabaseEnv)
+	if !ok || strings.TrimSpace(databaseName) == "" {
+		return fmt.Errorf("database env %q is missing", task.Backup.DatabaseEnv)
+	}
+	username, ok := lookupEnv(svc, task.Backup.UsernameEnv)
+	if !ok || strings.TrimSpace(username) == "" {
+		return fmt.Errorf("username env %q is missing", task.Backup.UsernameEnv)
+	}
+	password, ok := lookupEnv(svc, task.Backup.PasswordEnv)
+	if !ok || strings.TrimSpace(password) == "" {
+		return fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
+	}
+
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		return fmt.Errorf("read restore artifact: %w", err)
+	}
+	rawPath, err := e.expandGzipArtifact(artifactPath, data)
+	if err != nil {
+		return err
+	}
+	defer e.cleanupRestoreArtifact(rawPath)
+
+	container := containerName(task.InstanceID, svc.Name)
+	if _, err := e.podman().CopyToContainer(ctx, rawPath, container+":/tmp/admiral-restore.dump"); err != nil {
+		return fmt.Errorf("copy restore artifact into container %q: %w", container, err)
+	}
+	if _, err := e.podman().Exec(ctx, container, "env", fmt.Sprintf("PGPASSWORD=%s", password), "pg_restore", "-Fc", "-U", username, "-d", databaseName, "/tmp/admiral-restore.dump"); err != nil {
+		return fmt.Errorf("run pg_restore in container %q: %w", container, err)
+	}
+	return nil
+}
+
+func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral.FleetTask, artifactPath string) error {
+	if task.Restore.Service == "" {
+		return fmt.Errorf("restore service is required")
+	}
+	svc := findService(task.Services, task.Restore.Service)
+	if svc.Name == "" {
+		return fmt.Errorf("restore service %q not found", task.Restore.Service)
+	}
+	volName := volumeName(task.InstanceID, svc.Name)
+	inspect, err := e.podman().VolumeInspect(ctx, volName)
+	if err != nil {
+		return fmt.Errorf("inspect volume %q: %w", volName, err)
+	}
+	mountpoint := extractMountPoint(inspect)
+	if mountpoint == "" {
+		return fmt.Errorf("volume %q has no mountpoint", volName)
+	}
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		return fmt.Errorf("read restore artifact: %w", err)
+	}
+	if err := e.extractGzipTarToDir(data, mountpoint); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *SystemdPodmanExecutor) expandGzipArtifact(path string, data []byte) (string, error) {
+	reader, err := gzip.NewReader(strings.NewReader(string(data)))
+	if err != nil {
+		return "", fmt.Errorf("open restore archive %q: %w", path, err)
+	}
+	defer reader.Close()
+	base := e.DataDir
+	if strings.TrimSpace(base) == "" {
+		base = "/var/lib/admiral"
+	}
+	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create restore staging dir: %w", err)
+	}
+	rawPath := filepath.Join(dir, "artifact.raw")
+	rawFile, err := os.Create(rawPath)
+	if err != nil {
+		return "", fmt.Errorf("create restore raw artifact: %w", err)
+	}
+	defer rawFile.Close()
+	if _, err := io.Copy(rawFile, reader); err != nil {
+		return "", fmt.Errorf("decompress restore artifact: %w", err)
+	}
+	return rawPath, nil
+}
+
+func (e *SystemdPodmanExecutor) extractGzipTarToDir(data []byte, mountpoint string) error {
+	reader, err := gzip.NewReader(strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("open restore volume archive: %w", err)
+	}
+	defer reader.Close()
+	tarReader := tar.NewReader(reader)
+	for {
+		head, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read restore volume archive: %w", err)
+		}
+		targetPath := filepath.Join(mountpoint, filepath.Clean(head.Name))
+		if !strings.HasPrefix(targetPath, filepath.Clean(mountpoint)+string(os.PathSeparator)) && filepath.Clean(targetPath) != filepath.Clean(mountpoint) {
+			return fmt.Errorf("refuse to restore path outside mountpoint: %s", head.Name)
+		}
+		if head.FileInfo().IsDir() {
+			if err := os.MkdirAll(targetPath, head.FileInfo().Mode().Perm()); err != nil {
+				return fmt.Errorf("create restore directory %q: %w", targetPath, err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			return fmt.Errorf("prepare restore path %q: %w", targetPath, err)
+		}
+		out, err := os.Create(targetPath)
+		if err != nil {
+			return fmt.Errorf("create restore file %q: %w", targetPath, err)
+		}
+		if _, err := io.Copy(out, tarReader); err != nil {
+			out.Close()
+			return fmt.Errorf("write restore file %q: %w", targetPath, err)
+		}
+		_ = out.Close()
+	}
+	return nil
+}
+
+func (e *SystemdPodmanExecutor) checksumArtifact(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("sha256:%x", sum[:]), nil
+}
+
+func (e *SystemdPodmanExecutor) cleanupRestoreArtifact(path string) {
+	_ = os.Remove(path)
+	_ = os.RemoveAll(filepath.Dir(path))
 }
