@@ -36,8 +36,8 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 		return fmt.Errorf("create quadlet dir: %w", err)
 	}
 
-	multiSvc := len(task.Services) > 1
-	if multiSvc {
+	usePod := shouldUsePod(task)
+	if usePod {
 		if err := writeFile(filepath.Join(r.QuadletDir, PodFileName(task.InstanceID)), r.renderPod(task), 0644); err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 		if err := writeFile(envPath, renderEnv(svc), 0600); err != nil {
 			return err
 		}
-		if err := writeFile(filepath.Join(r.QuadletDir, ContainerFileName(task.InstanceID, svc.Name)), r.renderContainer(task.InstanceID, svc, envPath, multiSvc), 0644); err != nil {
+		if err := writeFile(filepath.Join(r.QuadletDir, ContainerFileName(task.InstanceID, svc.Name)), r.renderContainer(task.InstanceID, svc, envPath, usePod), 0644); err != nil {
 			return err
 		}
 	}
@@ -88,6 +88,19 @@ func SortedServices(services []admiral.ServiceInfo) []admiral.ServiceInfo {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+func shouldUsePod(task admiral.FleetTask) bool {
+	if len(task.Services) > 1 {
+		return true
+	}
+	if task.Tier.CPU > 0 {
+		return true
+	}
+	if strings.TrimSpace(task.Tier.Memory) != "" {
+		return true
+	}
+	return false
 }
 
 func PodFileName(instanceID string) string {
@@ -127,6 +140,12 @@ func (r *Renderer) renderPod(task admiral.FleetTask) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral pod for instance %s\n\n", task.InstanceID)
 	fmt.Fprintf(&b, "[Pod]\nPodName=%s\n", podName(task.InstanceID))
+	if limit := formatCPULimit(task.Tier.CPU); limit != "" {
+		fmt.Fprintf(&b, "PodmanArgs=--cpus=%s\n", limit)
+	}
+	if limit := formatMemoryLimit(task.Tier.Memory); limit != "" {
+		fmt.Fprintf(&b, "PodmanArgs=--memory=%s\n", limit)
+	}
 	for _, svc := range task.Services {
 		if svc.Port > 0 {
 			hostPort, ok := r.HostPorts[svc.Name]
@@ -141,14 +160,15 @@ func (r *Renderer) renderPod(task admiral.FleetTask) string {
 	return b.String()
 }
 
-func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string, multiSvc bool) string {
+func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string, usePod bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral service %s for instance %s\n\n", svc.Name, instanceID)
 	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\nEnvironmentFile=%s\n", containerName(instanceID, svc.Name), svc.Image, envPath)
-	if multiSvc {
+	if usePod {
 		fmt.Fprintf(&b, "Pod=%s\n", PodFileName(instanceID))
+		fmt.Fprintf(&b, "CgroupsMode=no-conmon\n")
 	}
-	if !multiSvc && svc.Port > 0 {
+	if !usePod && svc.Port > 0 {
 		hostPort, ok := r.HostPorts[svc.Name]
 		if ok && hostPort > 0 {
 			fmt.Fprintf(&b, "PublishPort=%d:%d\n", hostPort, svc.Port)
@@ -161,6 +181,37 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	}
 	b.WriteString("\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
+}
+
+func formatCPULimit(cpu float64) string {
+	if cpu <= 0 {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.3f", cpu), "0"), ".")
+}
+
+func formatMemoryLimit(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+
+	lower := strings.ToLower(value)
+	switch {
+	case strings.HasSuffix(lower, "mib"):
+		return value[:len(value)-3] + "m"
+	case strings.HasSuffix(lower, "mi"):
+		return value[:len(value)-2] + "m"
+	case strings.HasSuffix(lower, "mb"):
+		return value[:len(value)-2] + "m"
+	case strings.HasSuffix(lower, "gib"):
+		return value[:len(value)-3] + "g"
+	case strings.HasSuffix(lower, "gi"):
+		return value[:len(value)-2] + "g"
+	case strings.HasSuffix(lower, "gb"):
+		return value[:len(value)-2] + "g"
+	}
+	return value
 }
 
 func renderVolume(instanceID, serviceName string) string {

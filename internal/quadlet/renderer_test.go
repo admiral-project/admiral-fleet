@@ -16,6 +16,10 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 
 	task := admiral.FleetTask{
 		InstanceID: "demo001",
+		Tier: admiral.TierInfo{
+			CPU:    1.5,
+			Memory: "1536MiB",
+		},
 		Services: []admiral.ServiceInfo{
 			{
 				Name:  "app",
@@ -72,6 +76,12 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	if !strings.Contains(gotPod, "PodName=admiral-demo001") {
 		t.Fatalf("expected PodName in pod file, got %q", gotPod)
 	}
+	if !strings.Contains(gotPod, "PodmanArgs=--cpus=1.5") {
+		t.Fatalf("expected CPU limit in pod file, got %q", gotPod)
+	}
+	if !strings.Contains(gotPod, "PodmanArgs=--memory=1536m") {
+		t.Fatalf("expected memory limit in pod file, got %q", gotPod)
+	}
 	if !strings.Contains(gotPod, "PublishPort=80") {
 		t.Fatalf("expected PublishPort in pod file, got %q", gotPod)
 	}
@@ -91,15 +101,22 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	if strings.Contains(got, "--network-alias") {
 		t.Fatal("unexpected --network-alias in container file when pod is used")
 	}
+	if !strings.Contains(got, "CgroupsMode=no-conmon") {
+		t.Fatalf("expected cgroups mode in container file, got %q", got)
+	}
 }
 
-func TestRendererSingleServiceNoPod(t *testing.T) {
+func TestRendererSingleServiceWithTierLimitsCreatesPod(t *testing.T) {
 	quadletDir := t.TempDir()
 	dataDir := t.TempDir()
 	renderer := NewRenderer(quadletDir, dataDir)
 
 	task := admiral.FleetTask{
 		InstanceID: "single001",
+		Tier: admiral.TierInfo{
+			CPU:    1,
+			Memory: "512MiB",
+		},
 		Services: []admiral.ServiceInfo{
 			{
 				Name:  "web",
@@ -113,9 +130,9 @@ func TestRendererSingleServiceNoPod(t *testing.T) {
 		t.Fatalf("render quadlet: %v", err)
 	}
 
-	// Verify no pod file for single service
-	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-single001.pod")); err == nil {
-		t.Fatal("unexpected .pod file for single service")
+	// Verify pod file exists when tier limits are set
+	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-single001.pod")); err != nil {
+		t.Fatalf("expected pod file for single service tier limits: %v", err)
 	}
 
 	// Verify no network file either
@@ -123,14 +140,24 @@ func TestRendererSingleServiceNoPod(t *testing.T) {
 		t.Fatal("unexpected .network file for single service")
 	}
 
-	// Verify container file exists with PublishPort
+	// Verify container file exists and joins the pod
 	appData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-single001-web.container"))
 	if err != nil {
 		t.Fatalf("read container file: %v", err)
 	}
 	got := string(appData)
-	if !strings.Contains(got, "PublishPort=80") {
-		t.Fatalf("expected PublishPort in container file, got %q", got)
+	if !strings.Contains(got, "Pod=admiral-single001.pod") {
+		t.Fatalf("expected Pod= in container file, got %q", got)
+	}
+	if !strings.Contains(got, "CgroupsMode=no-conmon") {
+		t.Fatalf("expected cgroups mode in container file, got %q", got)
+	}
+	podData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-single001.pod"))
+	if err != nil {
+		t.Fatalf("read pod file: %v", err)
+	}
+	if !strings.Contains(string(podData), "PublishPort=80") {
+		t.Fatalf("expected PublishPort in pod file, got %q", string(podData))
 	}
 }
 

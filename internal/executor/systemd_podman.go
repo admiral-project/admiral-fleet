@@ -649,8 +649,7 @@ func containerName(instanceID, serviceName string) string {
 }
 
 func unitNames(task admiral.FleetTask) []string {
-	multiSvc := len(task.Services) > 1
-	if multiSvc {
+	if len(task.Services) > 1 || task.Tier.CPU > 0 || strings.TrimSpace(task.Tier.Memory) != "" {
 		return []string{quadlet.PodUnitName(task.InstanceID)}
 	}
 	units := make([]string, 0, len(task.Services))
