@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -34,6 +35,7 @@ func main() {
 	}
 	log.Printf("admiral-fleet started for node %s with executor %s", cfg.NodeID, cfg.Executor)
 	agent.StartHTTPServer(cfg.HTTPAddr, cfg.NodeID, cfg.Executor, cfg.PublicHost, cfg.PublicPort)
+	go fleetAgent.StartHealthChecker(context.Background())
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
