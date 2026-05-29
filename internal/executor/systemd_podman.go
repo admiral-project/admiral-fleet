@@ -85,7 +85,15 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = err.Error()
 		return result
 	}
-	if err := e.renderer().Render(task); err != nil {
+	ports, err := allocateHostPorts(e.DataDir, task.InstanceID, task.Services)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("allocate host ports for instance %q: %v", task.InstanceID, err)
+		return result
+	}
+	r := e.renderer()
+	r.HostPorts = ports
+	if err := r.Render(task); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("render quadlet for instance %q: %v", task.InstanceID, err)
 		return result
@@ -109,6 +117,19 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 }
 
 func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	ports := loadHostPorts(e.DataDir, task.InstanceID)
+	r := e.renderer()
+	r.HostPorts = ports
+	if err := r.Render(task); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("render quadlet on start for instance %q: %v", task.InstanceID, err)
+		return result
+	}
+	if err := e.systemd().DaemonReload(ctx); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("reload systemd on start for instance %q: %v", task.InstanceID, err)
+		return result
+	}
 	for _, unit := range containerUnitNames(task) {
 		if err := e.systemd().Start(ctx, unit); err != nil {
 			result.Success = false
@@ -590,6 +611,62 @@ func volumeName(instanceID, serviceName string) string {
 }
 func sha256Hex(data []byte) string   { return fmt.Sprintf("%x", sha256Sum(data)) }
 func sha256Sum(data []byte) [32]byte { return sha256.Sum256(data) }
+
+func portsFilePath(dataDir, instanceID string) string {
+	return filepath.Join(dataDir, "instances", instanceID, "ports.json")
+}
+
+const minHostPort = 40000
+const maxHostPort = 49999
+
+func allocateHostPorts(dataDir, instanceID string, services []admiral.ServiceInfo) (map[string]int, error) {
+	dir := filepath.Join(dataDir, "instances", instanceID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("create instance dir for port allocation: %w", err)
+	}
+	counterFile := filepath.Join(dataDir, "next_port")
+	next := minHostPort
+	if data, err := os.ReadFile(counterFile); err == nil {
+		fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &next)
+	}
+	if next < minHostPort {
+		next = minHostPort
+	}
+	ports := make(map[string]int, len(services))
+	for _, svc := range services {
+		if svc.Port == 0 {
+			continue
+		}
+		if next > maxHostPort {
+			return nil, fmt.Errorf("no available host ports in range %d-%d", minHostPort, maxHostPort)
+		}
+		ports[svc.Name] = next
+		next++
+	}
+	if err := os.WriteFile(counterFile, []byte(fmt.Sprintf("%d", next)), 0644); err != nil {
+		return nil, fmt.Errorf("persist next port: %w", err)
+	}
+	portData, err := json.Marshal(ports)
+	if err != nil {
+		return nil, fmt.Errorf("marshal ports: %w", err)
+	}
+	if err := os.WriteFile(portsFilePath(dataDir, instanceID), portData, 0600); err != nil {
+		return nil, fmt.Errorf("write ports file: %w", err)
+	}
+	return ports, nil
+}
+
+func loadHostPorts(dataDir, instanceID string) map[string]int {
+	data, err := os.ReadFile(portsFilePath(dataDir, instanceID))
+	if err != nil {
+		return nil
+	}
+	var ports map[string]int
+	if err := json.Unmarshal(data, &ports); err != nil {
+		return nil
+	}
+	return ports
+}
 
 func (e *SystemdPodmanExecutor) restoreBackup(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
 	if task.Restore == nil {

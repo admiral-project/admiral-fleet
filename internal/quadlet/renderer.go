@@ -13,6 +13,7 @@ import (
 type Renderer struct {
 	QuadletDir string
 	DataDir    string
+	HostPorts  map[string]int // service name -> allocated host port
 }
 
 func NewRenderer(quadletDir, dataDir string) *Renderer {
@@ -45,7 +46,7 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 		if err := writeFile(envPath, renderEnv(svc), 0600); err != nil {
 			return err
 		}
-		if err := writeFile(filepath.Join(r.QuadletDir, ContainerFileName(task.InstanceID, svc.Name)), renderContainer(task.InstanceID, svc, envPath), 0644); err != nil {
+		if err := writeFile(filepath.Join(r.QuadletDir, ContainerFileName(task.InstanceID, svc.Name)), r.renderContainer(task.InstanceID, svc, envPath), 0644); err != nil {
 			return err
 		}
 	}
@@ -107,12 +108,17 @@ func SafeName(value string) string {
 	return b.String()
 }
 
-func renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string) string {
+func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral service %s for instance %s\n\n", svc.Name, instanceID)
 	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\nEnvironmentFile=%s\n", containerName(instanceID, svc.Name), svc.Image, envPath)
 	if svc.Port > 0 {
-		fmt.Fprintf(&b, "PublishPort=127.0.0.1::%d\n", svc.Port)
+		hostPort, ok := r.HostPorts[svc.Name]
+		if ok && hostPort > 0 {
+			fmt.Fprintf(&b, "PublishPort=127.0.0.1:%d:%d\n", hostPort, svc.Port)
+		} else {
+			fmt.Fprintf(&b, "PublishPort=127.0.0.1::%d\n", svc.Port)
+		}
 	}
 	if svc.Volume != "" {
 		fmt.Fprintf(&b, "Volume=%s:/%s\n", VolumeFileName(instanceID, svc.Name), defaultVolumeTarget(svc))

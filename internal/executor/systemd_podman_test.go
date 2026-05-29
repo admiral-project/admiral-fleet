@@ -53,7 +53,7 @@ func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 	runner := &fakeSystemdRunner{}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodman(manager, nil, "", "")
+	exec := NewSystemdPodman(manager, nil, t.TempDir(), t.TempDir())
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
@@ -69,10 +69,11 @@ func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("expected success, got %q", res.Error)
 	}
-	if len(runner.calls) != 1 {
-		t.Fatalf("expected one systemd call, got %d", len(runner.calls))
+	// start calls daemon-reload then start per service unit
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected two systemd calls (daemon-reload + start), got %d", len(runner.calls))
 	}
-	got := runner.calls[0]
+	got := runner.calls[1]
 	want := []string{"systemctl", "start", "admiral-demo001-app.service"}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected call length: got %#v want %#v", got, want)
@@ -110,7 +111,7 @@ func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 }
 
 func TestSystemdPodmanExecutorRejectsInvalidProvision(t *testing.T) {
-	exec := NewSystemdPodman(nil, nil, "", "")
+	exec := NewSystemdPodman(nil, nil, t.TempDir(), t.TempDir())
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		NodeID:     "node_1",
 		Action:     admiral.ActionProvisionApp,
@@ -125,7 +126,7 @@ func TestSystemdPodmanExecutorRejectsInvalidProvision(t *testing.T) {
 func TestSystemdPodmanExecutorInspectAppSnapshot(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodman(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "", "")
+	exec := NewSystemdPodman(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), t.TempDir(), t.TempDir())
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
