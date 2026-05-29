@@ -71,6 +71,8 @@ func (e *SystemdPodmanExecutor) Execute(ctx context.Context, task admiral.FleetT
 		return e.deleteBackup(ctx, task, result)
 	case admiral.ActionTestStorage:
 		return e.testStorage(ctx, task, result)
+	case admiral.ActionRestoreBackup:
+		return e.restoreBackup(ctx, task, result)
 	default:
 		result.Success = false
 		result.Error = fmt.Sprintf("systemd-podman executor action %q is not implemented yet", task.Action)
@@ -158,17 +160,47 @@ func (e *SystemdPodmanExecutor) stop(ctx context.Context, task admiral.FleetTask
 func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
 	for _, unit := range containerUnitNames(task) {
 		_ = e.systemd().Stop(ctx, unit)
+		_ = e.systemd().Disable(ctx, unit)
 	}
+
+	// Force-remove Podman containers and volumes
+	for _, svc := range task.Services {
+		cName := containerName(task.InstanceID, svc.Name)
+		_ = e.podman().RemoveContainer(ctx, cName)
+		if svc.Volume != "" {
+			vName := volumeName(task.InstanceID, svc.Name)
+			_ = e.podman().RemoveVolume(ctx, vName)
+		}
+	}
+
+	// Remove Quadlet files
 	if err := e.renderer().Remove(task.InstanceID); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("remove quadlet files for %q: %v", task.InstanceID, err)
 		return result
 	}
+
 	if err := e.systemd().DaemonReload(ctx); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("reload systemd after deprovision %q: %v", task.InstanceID, err)
 		return result
 	}
+
+	// Reset failed systemd states
+	_ = e.systemd().ResetFailed(ctx)
+
+	// Clean up instance data dir (ports.json, env files)
+	dataDir := e.DataDir
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = "/var/lib/admiral"
+	}
+	instDir := filepath.Join(dataDir, "instances", task.InstanceID)
+	if err := os.RemoveAll(instDir); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("clean up instance data dir %q: %v", instDir, err)
+		return result
+	}
+
 	result.Success = true
 	result.Logs = fmt.Sprintf("deprovisioned instance %s", task.InstanceID)
 	return result
@@ -273,15 +305,15 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 		return result
 	}
 
+	// S3 upload is best-effort: local backup was already written successfully
 	if err := e.uploadToS3(ctx, task, data); err != nil {
-		result.Success = false
-		result.Error = err.Error()
-		return result
+		result.Logs = fmt.Sprintf("database backup stored at %s, but S3 upload failed: %v", path, err)
+	} else {
+		result.Logs = fmt.Sprintf("%s database backup stored at %s and uploaded to S3", databaseType, path)
 	}
 
 	checksum := sha256Hex(data)
 	result.Success = true
-	result.Logs = fmt.Sprintf("%s database backup stored at %s", databaseType, path)
 	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":"","backup_type":"database","database_type":%q,"storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, databaseType, path, len(data), checksum, time.Now().UTC().Format(time.RFC3339))
 	return result
 }
@@ -305,10 +337,11 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 		return result
 	}
 
+	// S3 upload is best-effort: local backup was already written successfully
 	if err := e.uploadToS3(ctx, task, volumes); err != nil {
-		result.Success = false
-		result.Error = err.Error()
-		return result
+		result.Logs = fmt.Sprintf("volume backup stored at %s, but S3 upload failed: %v", path, err)
+	} else {
+		result.Logs = fmt.Sprintf("volume backup stored at %s and uploaded to S3", path)
 	}
 
 	checksum := sha256Hex(volumes)
@@ -320,6 +353,17 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 
 func (e *SystemdPodmanExecutor) deleteBackup(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
 	if task.Storage == nil || task.Storage.Backend == "" || task.Storage.Backend == "local" {
+		if task.Storage != nil && task.Storage.Key != "" {
+			// Actually delete the local file
+			if err := os.Remove(task.Storage.Key); err != nil && !os.IsNotExist(err) {
+				result.Success = false
+				result.Error = fmt.Sprintf("delete local backup %q: %v", task.Storage.Key, err)
+				return result
+			}
+			// Remove parent directory if empty
+			parentDir := filepath.Dir(task.Storage.Key)
+			_ = os.Remove(parentDir) // ignore error if not empty
+		}
 		result.Success = true
 		result.Logs = fmt.Sprintf("backup %s deleted from local storage", task.Storage.BackupID)
 		result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"delete_backup","backup_id":%q}`, task.Storage.BackupID)

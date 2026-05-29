@@ -72,6 +72,16 @@ func (i *Inspector) RemovePod(ctx context.Context, podName string) error {
 	return err
 }
 
+func (i *Inspector) RemoveContainer(ctx context.Context, name string) error {
+	_, err := i.run(ctx, "rm", "--force", name)
+	return err
+}
+
+func (i *Inspector) RemoveVolume(ctx context.Context, name string) error {
+	_, err := i.run(ctx, "volume", "rm", "--force", name)
+	return err
+}
+
 func (i *Inspector) run(ctx context.Context, args ...string) ([]byte, error) {
 	timeout := i.Timeout
 	if timeout == 0 {

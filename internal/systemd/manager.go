@@ -60,6 +60,21 @@ func (m *Manager) Restart(ctx context.Context, unit string) error {
 	return err
 }
 
+func (m *Manager) Enable(ctx context.Context, unit string) error {
+	_, err := m.run(ctx, "enable", unit)
+	return err
+}
+
+func (m *Manager) Disable(ctx context.Context, unit string) error {
+	_, err := m.run(ctx, "disable", unit)
+	return err
+}
+
+func (m *Manager) ResetFailed(ctx context.Context) error {
+	_, err := m.run(ctx, "reset-failed")
+	return err
+}
+
 func (m *Manager) Status(ctx context.Context, unit string) ([]byte, error) {
 	return m.run(ctx, "status", "--no-pager", unit)
 }
