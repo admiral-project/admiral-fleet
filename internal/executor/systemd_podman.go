@@ -712,6 +712,38 @@ func loadHostPorts(dataDir, instanceID string) map[string]int {
 	return ports
 }
 
+// startRestoreContainers ensures all instance containers are running before
+// a restore operation. If containers were removed (e.g. by pause + Quadlet cleanup),
+// it re-renders and starts them via systemd.
+func (e *SystemdPodmanExecutor) startRestoreContainers(ctx context.Context, task admiral.FleetTask) error {
+	units := containerUnitNames(task)
+	if len(units) == 0 {
+		return nil
+	}
+
+	// If at least one container already exists, assume they're all running
+	firstContainer := containerName(task.InstanceID, task.Services[0].Name)
+	if err := e.podman().ContainerExists(ctx, firstContainer); err == nil {
+		return nil
+	}
+
+	ports := loadHostPorts(e.DataDir, task.InstanceID)
+	r := e.renderer()
+	r.HostPorts = ports
+	if err := r.Render(task); err != nil {
+		return fmt.Errorf("render quadlet for restore: %w", err)
+	}
+	if err := e.systemd().DaemonReload(ctx); err != nil {
+		return fmt.Errorf("daemon-reload for restore: %w", err)
+	}
+	for _, unit := range units {
+		if err := e.systemd().Start(ctx, unit); err != nil {
+			return fmt.Errorf("start container %q for restore: %w", unit, err)
+		}
+	}
+	return nil
+}
+
 func (e *SystemdPodmanExecutor) restoreBackup(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
 	if task.Restore == nil {
 		result.Success = false
@@ -731,6 +763,13 @@ func (e *SystemdPodmanExecutor) restoreBackup(ctx context.Context, task admiral.
 
 	artifactPath, err := e.fetchRestoreArtifact(ctx, task)
 	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+
+	// Ensure containers are running before restore (pause may have stopped them)
+	if err := e.startRestoreContainers(ctx, task); err != nil {
 		result.Success = false
 		result.Error = err.Error()
 		return result

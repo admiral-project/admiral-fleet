@@ -54,6 +54,11 @@ func (i *Inspector) ContainerInspect(ctx context.Context, container string) ([]b
 	return i.run(ctx, "container", "inspect", container, "--format", "json")
 }
 
+func (i *Inspector) ContainerExists(ctx context.Context, container string) error {
+	_, err := i.run(ctx, "container", "exists", container)
+	return err
+}
+
 func (i *Inspector) VolumeInspect(ctx context.Context, volume string) ([]byte, error) {
 	return i.run(ctx, "volume", "inspect", volume, "--format", "json")
 }
