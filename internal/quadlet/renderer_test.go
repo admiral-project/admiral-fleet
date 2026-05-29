@@ -9,7 +9,7 @@ import (
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
-func TestRendererWritesQuadletFiles(t *testing.T) {
+func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	quadletDir := t.TempDir()
 	dataDir := t.TempDir()
 	renderer := NewRenderer(quadletDir, dataDir)
@@ -21,7 +21,7 @@ func TestRendererWritesQuadletFiles(t *testing.T) {
 				Name:  "app",
 				Image: "docker.io/traefik/whoami:v1.10",
 				Port:  80,
-				Env:   map[string]string{"DATABASE_HOST": "db"},
+				Env:   map[string]string{"DATABASE_HOST": "localhost"},
 			},
 			{
 				Name:    "db",
@@ -38,7 +38,7 @@ func TestRendererWritesQuadletFiles(t *testing.T) {
 	}
 
 	expectedFiles := []string{
-		"admiral-demo001.network",
+		"admiral-demo001.pod",
 		"admiral-demo001-app.container",
 		"admiral-demo001-db.container",
 		"admiral-demo001-db.volume",
@@ -47,6 +47,11 @@ func TestRendererWritesQuadletFiles(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(quadletDir, name)); err != nil {
 			t.Fatalf("expected %s: %v", name, err)
 		}
+	}
+
+	// Verify no .network file is created when using pods
+	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-demo001.network")); err == nil {
+		t.Fatal("unexpected .network file when pod is used")
 	}
 
 	envPath := filepath.Join(dataDir, "instances", "demo001", "env", "db.env")
@@ -58,15 +63,74 @@ func TestRendererWritesQuadletFiles(t *testing.T) {
 		t.Fatalf("unexpected env file: %q", string(envData))
 	}
 
+	// Verify pod file
+	podData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-demo001.pod"))
+	if err != nil {
+		t.Fatalf("read pod file: %v", err)
+	}
+	gotPod := string(podData)
+	if !strings.Contains(gotPod, "PodName=admiral-demo001") {
+		t.Fatalf("expected PodName in pod file, got %q", gotPod)
+	}
+	if !strings.Contains(gotPod, "PublishPort=80") {
+		t.Fatalf("expected PublishPort in pod file, got %q", gotPod)
+	}
+
+	// Verify container files reference the pod instead of network
 	appData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-demo001-app.container"))
 	if err != nil {
 		t.Fatalf("read app container: %v", err)
 	}
 	got := string(appData)
-	for _, want := range []string{"Network=admiral-demo001.network", "PodmanArgs=--network-alias=app", "PublishPort=80"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("expected %q in container file, got %q", want, got)
-		}
+	if !strings.Contains(got, "Pod=admiral-demo001.pod") {
+		t.Fatalf("expected Pod= in container file, got %q", got)
+	}
+	if strings.Contains(got, "Network=") {
+		t.Fatal("unexpected Network= in container file when pod is used")
+	}
+	if strings.Contains(got, "--network-alias") {
+		t.Fatal("unexpected --network-alias in container file when pod is used")
+	}
+}
+
+func TestRendererSingleServiceNoPod(t *testing.T) {
+	quadletDir := t.TempDir()
+	dataDir := t.TempDir()
+	renderer := NewRenderer(quadletDir, dataDir)
+
+	task := admiral.FleetTask{
+		InstanceID: "single001",
+		Services: []admiral.ServiceInfo{
+			{
+				Name:  "web",
+				Image: "docker.io/traefik/whoami:v1.10",
+				Port:  80,
+			},
+		},
+	}
+
+	if err := renderer.Render(task); err != nil {
+		t.Fatalf("render quadlet: %v", err)
+	}
+
+	// Verify no pod file for single service
+	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-single001.pod")); err == nil {
+		t.Fatal("unexpected .pod file for single service")
+	}
+
+	// Verify no network file either
+	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-single001.network")); err == nil {
+		t.Fatal("unexpected .network file for single service")
+	}
+
+	// Verify container file exists with PublishPort
+	appData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-single001-web.container"))
+	if err != nil {
+		t.Fatalf("read container file: %v", err)
+	}
+	got := string(appData)
+	if !strings.Contains(got, "PublishPort=80") {
+		t.Fatalf("expected PublishPort in container file, got %q", got)
 	}
 }
 

@@ -38,7 +38,7 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 
 	multiSvc := len(task.Services) > 1
 	if multiSvc {
-		if err := writeFile(filepath.Join(r.QuadletDir, NetworkFileName(task.InstanceID)), renderNetwork(task.InstanceID), 0644); err != nil {
+		if err := writeFile(filepath.Join(r.QuadletDir, PodFileName(task.InstanceID)), r.renderPod(task), 0644); err != nil {
 			return err
 		}
 	}
@@ -90,6 +90,10 @@ func SortedServices(services []admiral.ServiceInfo) []admiral.ServiceInfo {
 	return out
 }
 
+func PodFileName(instanceID string) string {
+	return fmt.Sprintf("admiral-%s.pod", SafeName(instanceID))
+}
+
 func ContainerFileName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s.container", SafeName(instanceID), SafeName(serviceName))
 }
@@ -98,8 +102,8 @@ func VolumeFileName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s.volume", SafeName(instanceID), SafeName(serviceName))
 }
 
-func NetworkFileName(instanceID string) string {
-	return fmt.Sprintf("admiral-%s.network", SafeName(instanceID))
+func PodUnitName(instanceID string) string {
+	return fmt.Sprintf("admiral-%s.pod", SafeName(instanceID))
 }
 
 func ContainerUnitName(instanceID, serviceName string) string {
@@ -119,14 +123,32 @@ func SafeName(value string) string {
 	return b.String()
 }
 
+func (r *Renderer) renderPod(task admiral.FleetTask) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral pod for instance %s\n\n", task.InstanceID)
+	fmt.Fprintf(&b, "[Pod]\nPodName=%s\n", podName(task.InstanceID))
+	for _, svc := range task.Services {
+		if svc.Port > 0 {
+			hostPort, ok := r.HostPorts[svc.Name]
+			if ok && hostPort > 0 {
+				fmt.Fprintf(&b, "PublishPort=%d:%d\n", hostPort, svc.Port)
+			} else {
+				fmt.Fprintf(&b, "PublishPort=%d\n", svc.Port)
+			}
+		}
+	}
+	b.WriteString("\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=multi-user.target\n")
+	return b.String()
+}
+
 func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string, multiSvc bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral service %s for instance %s\n\n", svc.Name, instanceID)
 	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\nEnvironmentFile=%s\n", containerName(instanceID, svc.Name), svc.Image, envPath)
 	if multiSvc {
-		fmt.Fprintf(&b, "Network=%s\nPodmanArgs=--network-alias=%s\n", NetworkFileName(instanceID), svc.Name)
+		fmt.Fprintf(&b, "Pod=%s\n", PodFileName(instanceID))
 	}
-	if svc.Port > 0 {
+	if !multiSvc && svc.Port > 0 {
 		hostPort, ok := r.HostPorts[svc.Name]
 		if ok && hostPort > 0 {
 			fmt.Fprintf(&b, "PublishPort=%d:%d\n", hostPort, svc.Port)
@@ -135,14 +157,10 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 		}
 	}
 	if svc.Volume != "" {
-		fmt.Fprintf(&b, "Volume=%s:/%s\n", VolumeFileName(instanceID, svc.Name), defaultVolumeTarget(svc))
+		fmt.Fprintf(&b, "Volume=%s:%s\n", VolumeFileName(instanceID, svc.Name), defaultVolumeTarget(svc))
 	}
 	b.WriteString("\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
-}
-
-func renderNetwork(instanceID string) string {
-	return fmt.Sprintf("[Network]\nNetworkName=admiral-%s\n\n[Install]\nWantedBy=multi-user.target\n", SafeName(instanceID))
 }
 
 func renderVolume(instanceID, serviceName string) string {
@@ -169,6 +187,10 @@ func renderEnv(svc admiral.ServiceInfo) string {
 	return b.String()
 }
 
+func podName(instanceID string) string {
+	return fmt.Sprintf("admiral-%s", SafeName(instanceID))
+}
+
 func containerName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s", SafeName(instanceID), SafeName(serviceName))
 }
@@ -178,10 +200,14 @@ func volumeName(instanceID, serviceName string) string {
 }
 
 func defaultVolumeTarget(svc admiral.ServiceInfo) string {
-	if svc.Name == "db" || strings.Contains(svc.Image, "postgres") {
-		return "var/lib/postgresql/data"
+	img := strings.ToLower(svc.Image)
+	if svc.Name == "db" || strings.Contains(img, "postgres") {
+		return "/var/lib/postgresql/data"
 	}
-	return "data"
+	if strings.Contains(img, "mariadb") || strings.Contains(img, "mysql") {
+		return "/var/lib/mysql"
+	}
+	return "/data"
 }
 
 func writeFile(path, content string, perm os.FileMode) error {

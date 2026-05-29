@@ -105,7 +105,7 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = fmt.Sprintf("reload systemd for instance %q: %v", task.InstanceID, err)
 		return result
 	}
-	for _, unit := range containerUnitNames(task) {
+	for _, unit := range unitNames(task) {
 		if err := e.systemd().Start(ctx, unit); err != nil {
 			result.Success = false
 			result.Error = fmt.Sprintf("start unit %q: %v", unit, err)
@@ -138,7 +138,7 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 		result.Error = fmt.Sprintf("reload systemd on start for instance %q: %v", task.InstanceID, err)
 		return result
 	}
-	for _, unit := range containerUnitNames(task) {
+	for _, unit := range unitNames(task) {
 		if err := e.systemd().Start(ctx, unit); err != nil {
 			result.Success = false
 			result.Error = fmt.Sprintf("start unit %q: %v", unit, err)
@@ -151,7 +151,7 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 }
 
 func (e *SystemdPodmanExecutor) stop(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	for _, unit := range containerUnitNames(task) {
+	for _, unit := range unitNames(task) {
 		if err := e.systemd().Stop(ctx, unit); err != nil {
 			result.Success = false
 			result.Error = fmt.Sprintf("stop unit %q: %v", unit, err)
@@ -164,7 +164,7 @@ func (e *SystemdPodmanExecutor) stop(ctx context.Context, task admiral.FleetTask
 }
 
 func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	for _, unit := range containerUnitNames(task) {
+	for _, unit := range unitNames(task) {
 		_ = e.systemd().Stop(ctx, unit)
 		_ = e.systemd().Disable(ctx, unit)
 	}
@@ -648,7 +648,11 @@ func containerName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s", quadlet.SafeName(instanceID), quadlet.SafeName(serviceName))
 }
 
-func containerUnitNames(task admiral.FleetTask) []string {
+func unitNames(task admiral.FleetTask) []string {
+	multiSvc := len(task.Services) > 1
+	if multiSvc {
+		return []string{quadlet.PodUnitName(task.InstanceID)}
+	}
 	units := make([]string, 0, len(task.Services))
 	for _, svc := range task.Services {
 		units = append(units, quadlet.ContainerUnitName(task.InstanceID, svc.Name))
@@ -722,7 +726,7 @@ func loadHostPorts(dataDir, instanceID string) map[string]int {
 // a restore operation. If containers were removed (e.g. by pause + Quadlet cleanup),
 // it re-renders and starts them via systemd.
 func (e *SystemdPodmanExecutor) startRestoreContainers(ctx context.Context, task admiral.FleetTask) error {
-	units := containerUnitNames(task)
+	units := unitNames(task)
 	if len(units) == 0 {
 		return nil
 	}
