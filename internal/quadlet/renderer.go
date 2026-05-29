@@ -36,6 +36,13 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 		return fmt.Errorf("create quadlet dir: %w", err)
 	}
 
+	multiSvc := len(task.Services) > 1
+	if multiSvc {
+		if err := writeFile(filepath.Join(r.QuadletDir, NetworkFileName(task.InstanceID)), renderNetwork(task.InstanceID), 0644); err != nil {
+			return err
+		}
+	}
+
 	for _, svc := range SortedServices(task.Services) {
 		if svc.Volume != "" {
 			if err := writeFile(filepath.Join(r.QuadletDir, VolumeFileName(task.InstanceID, svc.Name)), renderVolume(task.InstanceID, svc.Name), 0644); err != nil {
@@ -46,7 +53,7 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 		if err := writeFile(envPath, renderEnv(svc), 0600); err != nil {
 			return err
 		}
-		if err := writeFile(filepath.Join(r.QuadletDir, ContainerFileName(task.InstanceID, svc.Name)), r.renderContainer(task.InstanceID, svc, envPath), 0644); err != nil {
+		if err := writeFile(filepath.Join(r.QuadletDir, ContainerFileName(task.InstanceID, svc.Name)), r.renderContainer(task.InstanceID, svc, envPath, multiSvc), 0644); err != nil {
 			return err
 		}
 	}
@@ -54,13 +61,13 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 }
 
 func (r *Renderer) Remove(instanceID string) error {
-	pattern := filepath.Join(r.QuadletDir, "admiral-"+SafeName(instanceID)+"-*")
+	pattern := filepath.Join(r.QuadletDir, "admiral-"+SafeName(instanceID)+"*")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return err
 	}
 	for _, path := range matches {
-		if strings.HasSuffix(path, ".pod") || strings.HasSuffix(path, ".container") || strings.HasSuffix(path, ".volume") {
+		if strings.HasSuffix(path, ".pod") || strings.HasSuffix(path, ".container") || strings.HasSuffix(path, ".volume") || strings.HasSuffix(path, ".network") {
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				return err
 			}
@@ -91,6 +98,10 @@ func VolumeFileName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s.volume", SafeName(instanceID), SafeName(serviceName))
 }
 
+func NetworkFileName(instanceID string) string {
+	return fmt.Sprintf("admiral-%s.network", SafeName(instanceID))
+}
+
 func ContainerUnitName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s.service", SafeName(instanceID), SafeName(serviceName))
 }
@@ -108,16 +119,19 @@ func SafeName(value string) string {
 	return b.String()
 }
 
-func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string) string {
+func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string, multiSvc bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral service %s for instance %s\n\n", svc.Name, instanceID)
 	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\nEnvironmentFile=%s\n", containerName(instanceID, svc.Name), svc.Image, envPath)
+	if multiSvc {
+		fmt.Fprintf(&b, "Network=%s\nPodmanArgs=--network-alias=%s\n", NetworkFileName(instanceID), svc.Name)
+	}
 	if svc.Port > 0 {
 		hostPort, ok := r.HostPorts[svc.Name]
 		if ok && hostPort > 0 {
-			fmt.Fprintf(&b, "PublishPort=127.0.0.1:%d:%d\n", hostPort, svc.Port)
+			fmt.Fprintf(&b, "PublishPort=%d:%d\n", hostPort, svc.Port)
 		} else {
-			fmt.Fprintf(&b, "PublishPort=127.0.0.1::%d\n", svc.Port)
+			fmt.Fprintf(&b, "PublishPort=%d\n", svc.Port)
 		}
 	}
 	if svc.Volume != "" {
@@ -125,6 +139,10 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	}
 	b.WriteString("\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
+}
+
+func renderNetwork(instanceID string) string {
+	return fmt.Sprintf("[Network]\nNetworkName=admiral-%s\n\n[Install]\nWantedBy=multi-user.target\n", SafeName(instanceID))
 }
 
 func renderVolume(instanceID, serviceName string) string {

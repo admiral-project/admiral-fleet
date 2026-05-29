@@ -3,6 +3,7 @@ package quadlet
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
@@ -37,6 +38,7 @@ func TestRendererWritesQuadletFiles(t *testing.T) {
 	}
 
 	expectedFiles := []string{
+		"admiral-demo001.network",
 		"admiral-demo001-app.container",
 		"admiral-demo001-db.container",
 		"admiral-demo001-db.volume",
@@ -54,6 +56,17 @@ func TestRendererWritesQuadletFiles(t *testing.T) {
 	}
 	if string(envData) != "POSTGRES_DB=whoami\nPOSTGRES_PASSWORD=secret\nPOSTGRES_USER=user\n" {
 		t.Fatalf("unexpected env file: %q", string(envData))
+	}
+
+	appData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-demo001-app.container"))
+	if err != nil {
+		t.Fatalf("read app container: %v", err)
+	}
+	got := string(appData)
+	for _, want := range []string{"Network=admiral-demo001.network", "PodmanArgs=--network-alias=app", "PublishPort=80"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in container file, got %q", want, got)
+		}
 	}
 }
 

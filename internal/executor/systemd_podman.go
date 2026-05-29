@@ -112,9 +112,15 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 			return result
 		}
 	}
+	meta := map[string]interface{}{
+		"executor":   "systemd-podman",
+		"action":     "provision_app",
+		"host_ports": ports,
+	}
+	metaBytes, _ := json.Marshal(meta)
 	result.Success = true
 	result.Logs = fmt.Sprintf("provisioned instance %s", task.InstanceID)
-	result.Metadata = `{"executor":"systemd-podman","action":"provision_app"}`
+	result.Metadata = string(metaBytes)
 	return result
 }
 
