@@ -933,11 +933,39 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 	defer e.cleanupRestoreArtifact(rawPath)
 
 	container := containerName(task.InstanceID, svc.Name)
+
+	var existsErr error
+	for i := 0; i < 15; i++ {
+		if err := e.podman().ContainerExists(ctx, container); err == nil {
+			existsErr = nil
+			break
+		}
+		existsErr = err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if existsErr != nil {
+		return fmt.Errorf("container %q never became available: %w", container, existsErr)
+	}
+
 	if _, err := e.podman().CopyToContainer(ctx, rawPath, container+":/tmp/admiral-restore.dump"); err != nil {
 		return fmt.Errorf("copy restore artifact into container %q: %w", container, err)
 	}
-	if _, err := e.podman().Exec(ctx, container, "env", fmt.Sprintf("PGPASSWORD=%s", password), "pg_restore", "-Fc", "-U", username, "-d", databaseName, "/tmp/admiral-restore.dump"); err != nil {
-		return fmt.Errorf("run pg_restore in container %q: %w", container, err)
+
+	dbEngine := normalizeDatabaseType(task.Restore.DatabaseType)
+	switch dbEngine {
+	case "mysql", "mariadb":
+		cmd := fmt.Sprintf("MYSQL_PWD='%s' mysql -u %s %s < /tmp/admiral-restore.dump", password, username, databaseName)
+		if _, err := e.podman().Exec(ctx, container, "/bin/sh", "-c", cmd); err != nil {
+			return fmt.Errorf("run mysql restore in container %q: %w", container, err)
+		}
+	default:
+		if _, err := e.podman().Exec(ctx, container, "env", fmt.Sprintf("PGPASSWORD=%s", password), "pg_restore", "-Fc", "-U", username, "-d", databaseName, "/tmp/admiral-restore.dump"); err != nil {
+			return fmt.Errorf("run pg_restore in container %q: %w", container, err)
+		}
 	}
 	return nil
 }
