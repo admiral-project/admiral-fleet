@@ -95,10 +95,12 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = fmt.Sprintf("reload systemd for instance %q: %v", task.InstanceID, err)
 		return result
 	}
-	if err := e.systemd().Start(ctx, quadlet.PodUnitName(task.InstanceID)); err != nil {
-		result.Success = false
-		result.Error = fmt.Sprintf("start pod unit %q: %v", quadlet.PodUnitName(task.InstanceID), err)
-		return result
+	for _, unit := range containerUnitNames(task) {
+		if err := e.systemd().Start(ctx, unit); err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("start unit %q: %v", unit, err)
+			return result
+		}
 	}
 	result.Success = true
 	result.Logs = fmt.Sprintf("provisioned instance %s", task.InstanceID)
@@ -107,10 +109,12 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 }
 
 func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	if err := e.systemd().Start(ctx, quadlet.PodUnitName(task.InstanceID)); err != nil {
-		result.Success = false
-		result.Error = fmt.Sprintf("start unit %q: %v", quadlet.PodUnitName(task.InstanceID), err)
-		return result
+	for _, unit := range containerUnitNames(task) {
+		if err := e.systemd().Start(ctx, unit); err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("start unit %q: %v", unit, err)
+			return result
+		}
 	}
 	result.Success = true
 	result.Logs = fmt.Sprintf("started instance %s", task.InstanceID)
@@ -118,10 +122,12 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 }
 
 func (e *SystemdPodmanExecutor) stop(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	if err := e.systemd().Stop(ctx, quadlet.PodUnitName(task.InstanceID)); err != nil {
-		result.Success = false
-		result.Error = fmt.Sprintf("stop unit %q: %v", quadlet.PodUnitName(task.InstanceID), err)
-		return result
+	for _, unit := range containerUnitNames(task) {
+		if err := e.systemd().Stop(ctx, unit); err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("stop unit %q: %v", unit, err)
+			return result
+		}
 	}
 	result.Success = true
 	result.Logs = fmt.Sprintf("stopped instance %s", task.InstanceID)
@@ -129,7 +135,9 @@ func (e *SystemdPodmanExecutor) stop(ctx context.Context, task admiral.FleetTask
 }
 
 func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	_ = e.systemd().Stop(ctx, quadlet.PodUnitName(task.InstanceID))
+	for _, unit := range containerUnitNames(task) {
+		_ = e.systemd().Stop(ctx, unit)
+	}
 	if err := e.renderer().Remove(task.InstanceID); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("remove quadlet files for %q: %v", task.InstanceID, err)
@@ -165,20 +173,6 @@ func (e *SystemdPodmanExecutor) inspect(ctx context.Context, task admiral.FleetT
 }
 
 func (e *SystemdPodmanExecutor) inspectSnapshot(ctx context.Context, task admiral.FleetTask) (map[string]interface{}, error) {
-	podName := quadlet.PodName(task.InstanceID)
-	if err := e.podman().PodExists(ctx, podName); err != nil {
-		return nil, fmt.Errorf("inspect pod %q: %w", podName, err)
-	}
-
-	podStatus, err := e.systemd().Status(ctx, quadlet.PodUnitName(task.InstanceID))
-	if err != nil {
-		return nil, fmt.Errorf("inspect systemd pod unit %q: %w", quadlet.PodUnitName(task.InstanceID), err)
-	}
-	pods, err := e.podman().PodPS(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list pods for instance %q: %w", task.InstanceID, err)
-	}
-
 	services := make([]map[string]interface{}, 0, len(task.Services))
 	for _, svc := range task.Services {
 		containerName := containerName(task.InstanceID, svc.Name)
@@ -187,10 +181,15 @@ func (e *SystemdPodmanExecutor) inspectSnapshot(ctx context.Context, task admira
 			return nil, fmt.Errorf("inspect container %q: %w", containerName, err)
 		}
 
+		unitName := quadlet.ContainerUnitName(task.InstanceID, svc.Name)
+		unitStatus, _ := e.systemd().Status(ctx, unitName)
+
 		serviceSnapshot := map[string]interface{}{
 			"name":              svc.Name,
 			"image":             svc.Image,
 			"container":         containerName,
+			"container_unit":    unitName,
+			"container_status":  strings.TrimSpace(string(unitStatus)),
 			"container_inspect": mustJSONValue(containerInspect),
 		}
 		if svc.Volume != "" {
@@ -208,15 +207,14 @@ func (e *SystemdPodmanExecutor) inspectSnapshot(ctx context.Context, task admira
 		services = append(services, serviceSnapshot)
 	}
 
+	containers, _ := e.podman().ContainerPS(ctx)
+
 	return map[string]interface{}{
-		"executor":        "systemd-podman",
-		"instance_id":     task.InstanceID,
-		"pod_name":        podName,
-		"pod_unit":        quadlet.PodUnitName(task.InstanceID),
-		"pod_unit_status": strings.TrimSpace(string(podStatus)),
-		"pods":            mustJSONValue(pods),
-		"containers":      services,
-		"inspected_at":    time.Now().UTC().Format(time.RFC3339),
+		"executor":       "systemd-podman",
+		"instance_id":    task.InstanceID,
+		"containers":     services,
+		"all_containers": mustJSONValue(containers),
+		"inspected_at":   time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 
@@ -578,6 +576,15 @@ func (e *SystemdPodmanExecutor) renderer() *quadlet.Renderer {
 func containerName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s", quadlet.SafeName(instanceID), quadlet.SafeName(serviceName))
 }
+
+func containerUnitNames(task admiral.FleetTask) []string {
+	units := make([]string, 0, len(task.Services))
+	for _, svc := range task.Services {
+		units = append(units, quadlet.ContainerUnitName(task.InstanceID, svc.Name))
+	}
+	return units
+}
+
 func volumeName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s", quadlet.SafeName(instanceID), quadlet.SafeName(serviceName))
 }

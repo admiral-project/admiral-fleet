@@ -37,7 +37,6 @@ func TestRendererWritesQuadletFiles(t *testing.T) {
 	}
 
 	expectedFiles := []string{
-		"admiral-demo001-pod.pod",
 		"admiral-demo001-app.container",
 		"admiral-demo001-db.container",
 		"admiral-demo001-db.volume",

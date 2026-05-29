@@ -35,10 +35,6 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 		return fmt.Errorf("create quadlet dir: %w", err)
 	}
 
-	if err := writeFile(filepath.Join(r.QuadletDir, PodFileName(task.InstanceID)), renderPod(task), 0644); err != nil {
-		return err
-	}
-
 	for _, svc := range SortedServices(task.Services) {
 		if svc.Volume != "" {
 			if err := writeFile(filepath.Join(r.QuadletDir, VolumeFileName(task.InstanceID, svc.Name)), renderVolume(task.InstanceID, svc.Name), 0644); err != nil {
@@ -86,10 +82,6 @@ func SortedServices(services []admiral.ServiceInfo) []admiral.ServiceInfo {
 	return out
 }
 
-func PodFileName(instanceID string) string {
-	return fmt.Sprintf("admiral-%s-pod.pod", SafeName(instanceID))
-}
-
 func ContainerFileName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s.container", SafeName(instanceID), SafeName(serviceName))
 }
@@ -98,16 +90,8 @@ func VolumeFileName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s.volume", SafeName(instanceID), SafeName(serviceName))
 }
 
-func PodUnitName(instanceID string) string {
-	return fmt.Sprintf("admiral-%s-pod-pod.service", SafeName(instanceID))
-}
-
 func ContainerUnitName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s.service", SafeName(instanceID), SafeName(serviceName))
-}
-
-func PodName(instanceID string) string {
-	return fmt.Sprintf("admiral-%s", SafeName(instanceID))
 }
 
 func SafeName(value string) string {
@@ -123,23 +107,13 @@ func SafeName(value string) string {
 	return b.String()
 }
 
-func renderPod(task admiral.FleetTask) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral instance %s pod\n\n", task.InstanceID)
-	fmt.Fprintf(&b, "[Pod]\nPodName=%s\n", PodName(task.InstanceID))
-	for _, svc := range SortedServices(task.Services) {
-		if svc.Port > 0 {
-			fmt.Fprintf(&b, "PublishPort=127.0.0.1::%d\n", svc.Port)
-		}
-	}
-	b.WriteString("\n[Service]\nTimeoutStartSec=900\n\n[Install]\nWantedBy=multi-user.target\n")
-	return b.String()
-}
-
 func renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral service %s for instance %s\n\n", svc.Name, instanceID)
-	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\nPod=%s\nEnvironmentFile=%s\n", containerName(instanceID, svc.Name), svc.Image, PodFileName(instanceID), envPath)
+	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\nEnvironmentFile=%s\n", containerName(instanceID, svc.Name), svc.Image, envPath)
+	if svc.Port > 0 {
+		fmt.Fprintf(&b, "PublishPort=127.0.0.1::%d\n", svc.Port)
+	}
 	if svc.Volume != "" {
 		fmt.Fprintf(&b, "Volume=%s:/%s\n", VolumeFileName(instanceID, svc.Name), defaultVolumeTarget(svc))
 	}

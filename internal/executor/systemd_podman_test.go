@@ -61,6 +61,9 @@ func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 		NodeID:      "node_1",
 		Action:      admiral.ActionStartApp,
 		InstanceID:  "demo001",
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "example.com/app:1"},
+		},
 	}, "node_1")
 
 	if !res.Success {
@@ -70,7 +73,7 @@ func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 		t.Fatalf("expected one systemd call, got %d", len(runner.calls))
 	}
 	got := runner.calls[0]
-	want := []string{"systemctl", "start", "admiral-demo001-pod-pod.service"}
+	want := []string{"systemctl", "start", "admiral-demo001-app.service"}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected call length: got %#v want %#v", got, want)
 	}
@@ -93,6 +96,9 @@ func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 		NodeID:      "node_1",
 		Action:      admiral.ActionStopApp,
 		InstanceID:  "demo001",
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "example.com/app:1"},
+		},
 	}, "node_1")
 
 	if res.Success {
