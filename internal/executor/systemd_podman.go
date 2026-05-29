@@ -951,11 +951,44 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 		return fmt.Errorf("container %q never became available: %w", container, existsErr)
 	}
 
+	dbEngine := normalizeDatabaseType(task.Restore.DatabaseType)
+	if dbEngine == "mysql" || dbEngine == "mariadb" {
+		for i := 0; i < 15; i++ {
+			out, err := e.podman().Exec(ctx, container, "mysqladmin", "ping", "-u", username, fmt.Sprintf("-p%s", password), "--silent")
+			if err == nil && strings.TrimSpace(string(out)) == "mysqld is alive" {
+				break
+			}
+			if i == 14 {
+				return fmt.Errorf("database in container %q not ready after 30s: %w", container, err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+	if dbEngine == "postgresql" {
+		for i := 0; i < 15; i++ {
+			out, err := e.podman().Exec(ctx, container, "pg_isready", "-U", username, "-d", databaseName)
+			if err == nil && strings.Contains(string(out), "accepting connections") {
+				break
+			}
+			if i == 14 {
+				return fmt.Errorf("database in container %q not ready after 30s: %w", container, err)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+
 	if _, err := e.podman().CopyToContainer(ctx, rawPath, container+":/tmp/admiral-restore.dump"); err != nil {
 		return fmt.Errorf("copy restore artifact into container %q: %w", container, err)
 	}
 
-	dbEngine := normalizeDatabaseType(task.Restore.DatabaseType)
 	switch dbEngine {
 	case "mysql", "mariadb":
 		cmd := fmt.Sprintf("MYSQL_PWD='%s' mysql -u %s %s < /tmp/admiral-restore.dump", password, username, databaseName)
