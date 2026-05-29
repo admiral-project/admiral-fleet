@@ -103,7 +103,7 @@ func VolumeFileName(instanceID, serviceName string) string {
 }
 
 func PodUnitName(instanceID string) string {
-	return fmt.Sprintf("admiral-%s.pod", SafeName(instanceID))
+	return fmt.Sprintf("admiral-%s-pod.service", SafeName(instanceID))
 }
 
 func ContainerUnitName(instanceID, serviceName string) string {
