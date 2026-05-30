@@ -112,6 +112,8 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 			return result
 		}
 	}
+	writeInstanceTierInfo(e.DataDir, task.InstanceID, task.Tier)
+
 	meta := map[string]interface{}{
 		"executor":   "systemd-podman",
 		"action":     "provision_app",
@@ -667,6 +669,21 @@ func sha256Sum(data []byte) [32]byte { return sha256.Sum256(data) }
 
 func portsFilePath(dataDir, instanceID string) string {
 	return filepath.Join(dataDir, "instances", instanceID, "ports.json")
+}
+
+func writeInstanceTierInfo(dataDir, instanceID string, tier admiral.TierInfo) {
+	dir := filepath.Join(dataDir, "instances", instanceID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return
+	}
+	info := map[string]interface{}{
+		"storage": tier.Storage,
+	}
+	data, err := json.Marshal(info)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, "tier.json"), data, 0600)
 }
 
 const minHostPort = 40000

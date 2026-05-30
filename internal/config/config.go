@@ -8,19 +8,21 @@ import (
 )
 
 type Config struct {
-	NodeID         string
-	RabbitMQURL    string
-	RabbitMQCAFile string
-	APIURL         string
-	APICACertFile  string
-	SharedToken    string
-	Executor       string
-	QuadletDir     string
-	DataDir        string
-	CallbackOutbox string
-	HTTPAddr       string
-	PublicHost     string
-	PublicPort     string
+	NodeID                string
+	RabbitMQURL           string
+	RabbitMQCAFile        string
+	APIURL                string
+	APICACertFile         string
+	SharedToken           string
+	Executor              string
+	QuadletDir            string
+	DataDir               string
+	CallbackOutbox        string
+	HTTPAddr              string
+	PublicHost            string
+	PublicPort            string
+	StorageCheckInterval  string
+	StorageExceededAction string
 }
 
 func Load() (*Config, error) {
@@ -34,10 +36,12 @@ func Load() (*Config, error) {
 		Executor:       getEnv("ADMIRAL_FLEET_EXECUTOR", "simulated"),
 		QuadletDir:     getEnv("ADMIRAL_FLEET_QUADLET_DIR", "/etc/containers/systemd/admiral"),
 		DataDir:        getEnv("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
-		CallbackOutbox: getEnv("ADMIRAL_FLEET_CALLBACK_OUTBOX", "/var/lib/admiral/outbox"),
-		HTTPAddr:       getEnv("ADMIRAL_FLEET_HTTP_ADDR", "127.0.0.1:9099"),
-		PublicHost:     os.Getenv("ADMIRAL_FLEET_PUBLIC_HOST"),
-		PublicPort:     os.Getenv("ADMIRAL_FLEET_PUBLIC_PORT"),
+		CallbackOutbox:       getEnv("ADMIRAL_FLEET_CALLBACK_OUTBOX", "/var/lib/admiral/outbox"),
+		HTTPAddr:             getEnv("ADMIRAL_FLEET_HTTP_ADDR", "127.0.0.1:9099"),
+		PublicHost:           os.Getenv("ADMIRAL_FLEET_PUBLIC_HOST"),
+		PublicPort:           os.Getenv("ADMIRAL_FLEET_PUBLIC_PORT"),
+		StorageCheckInterval: getEnv("ADMIRAL_FLEET_STORAGE_CHECK_INTERVAL", "60s"),
+		StorageExceededAction: getEnv("ADMIRAL_FLEET_STORAGE_EXCEEDED_ACTION", "report_only"),
 	}
 
 	if cfg.NodeID == "" {

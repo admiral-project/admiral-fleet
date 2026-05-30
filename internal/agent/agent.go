@@ -14,15 +14,17 @@ import (
 )
 
 type Agent struct {
-	NodeID      string
-	APIURL      string
-	SharedToken string
-	executor    executor.Executor
-	http        *http.Client
-	outbox      *outbox
+	NodeID                string
+	APIURL                string
+	SharedToken           string
+	StorageCheckInterval  string
+	StorageExceededAction string
+	executor              executor.Executor
+	http                  *http.Client
+	outbox                *outbox
 }
 
-func New(nodeID, apiURL, sharedToken, caCertFile, outboxDir string, exec executor.Executor) (*Agent, error) {
+func New(nodeID, apiURL, sharedToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction string, exec executor.Executor) (*Agent, error) {
 	if err := tlsconfig.ValidateURLScheme(apiURL, "https"); err != nil {
 		return nil, err
 	}
@@ -32,10 +34,12 @@ func New(nodeID, apiURL, sharedToken, caCertFile, outboxDir string, exec executo
 	}
 
 	return &Agent{
-		NodeID:      nodeID,
-		APIURL:      apiURL,
-		SharedToken: sharedToken,
-		executor:    exec,
+		NodeID:                nodeID,
+		APIURL:                apiURL,
+		SharedToken:           sharedToken,
+		StorageCheckInterval:  storageCheckInterval,
+		StorageExceededAction: storageExceededAction,
+		executor:              exec,
 		http: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
@@ -63,6 +67,31 @@ func (a *Agent) HandleTask(task admiral.FleetTask) error {
 	}
 	if a.outbox != nil {
 		_ = a.outbox.flush(a.send)
+	}
+	return nil
+}
+
+func (a *Agent) postStorage(report admiral.StorageReport) error {
+	body, err := json.Marshal(report)
+	if err != nil {
+		return fmt.Errorf("encode storage report: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, a.APIURL+"/api/v1/fleet/storage", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create storage request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admiral-Token", a.SharedToken)
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("send storage report: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("storage report failed with HTTP %d", resp.StatusCode)
 	}
 	return nil
 }

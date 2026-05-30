@@ -29,13 +29,14 @@ func main() {
 	defer consumer.Close()
 
 	exec := buildExecutor(cfg)
-	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile, cfg.CallbackOutbox, exec)
+	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile, cfg.CallbackOutbox, cfg.StorageCheckInterval, cfg.StorageExceededAction, exec)
 	if err != nil {
 		log.Fatalf("agent configuration error: %v", err)
 	}
 	log.Printf("admiral-fleet started for node %s with executor %s", cfg.NodeID, cfg.Executor)
 	agent.StartHTTPServer(cfg.HTTPAddr, cfg.NodeID, cfg.Executor, cfg.PublicHost, cfg.PublicPort)
 	go fleetAgent.StartHealthChecker(context.Background())
+	go fleetAgent.StartStorageChecker(context.Background())
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)

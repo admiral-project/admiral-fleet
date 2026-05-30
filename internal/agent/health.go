@@ -5,11 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
 type healthReport struct {
@@ -141,6 +146,239 @@ func extractInstanceID(podName string) string {
 		return ""
 	}
 	return strings.TrimPrefix(podName, "admiral-")
+}
+
+func (a *Agent) StartStorageChecker(ctx context.Context) {
+	interval := 60 * time.Second
+	if a.StorageCheckInterval != "" {
+		if d, err := time.ParseDuration(a.StorageCheckInterval); err == nil && d > 0 {
+			interval = d
+		}
+	}
+
+	time.Sleep(30 * time.Second)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.checkInstanceStorage(ctx)
+		}
+	}
+}
+
+type instanceVolInfo struct {
+	InstanceID    string
+	VolumeName    string
+	Mountpoint    string
+	StorageLimit  int64
+}
+
+func (a *Agent) checkInstanceStorage(ctx context.Context) {
+	instances := listQuadletPodFiles()
+	if len(instances) == 0 {
+		return
+	}
+
+	for _, instanceID := range instances {
+		report := a.measureInstanceStorage(ctx, instanceID)
+		if report == nil {
+			continue
+		}
+		if err := a.postStorage(*report); err != nil {
+			_ = err
+		}
+	}
+}
+
+func (a *Agent) measureInstanceStorage(ctx context.Context, instanceID string) *admiral.StorageReport {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	limitBytes := int64(0)
+	storageLimit := readInstanceStorageLimit(instanceID)
+	if storageLimit != "" {
+		limitBytes = parseStorageLimitBytes(storageLimit)
+	}
+	if limitBytes <= 0 {
+		return &admiral.StorageReport{
+			InstanceID:        instanceID,
+			NodeID:            a.NodeID,
+			StorageState:      admiral.StorageUnknown,
+			StorageMessage:    "no storage limit configured",
+			CheckedAt:         now,
+		}
+	}
+
+	usedBytes := int64(0)
+	mountpoint := findVolumeMountpoint(ctx, instanceID)
+	if mountpoint == "" {
+		return &admiral.StorageReport{
+			InstanceID:        instanceID,
+			NodeID:            a.NodeID,
+			StorageLimitBytes: limitBytes,
+			StorageState:      admiral.StorageUnknown,
+			StorageMessage:    "no volume mountpoint found",
+			CheckedAt:         now,
+		}
+	}
+
+	usedBytes = measureDirUsage(ctx, mountpoint)
+	if usedBytes < 0 {
+		return &admiral.StorageReport{
+			InstanceID:        instanceID,
+			NodeID:            a.NodeID,
+			StorageLimitBytes: limitBytes,
+			StorageState:      admiral.StorageUnknown,
+			StorageMessage:    "failed to measure storage usage",
+			CheckedAt:         now,
+		}
+	}
+
+	usedPct := float64(0)
+	if limitBytes > 0 {
+		usedPct = math.Round(float64(usedBytes)/float64(limitBytes)*10000) / 100
+	}
+
+	state, msg := classifyStorageState(usedPct)
+
+	return &admiral.StorageReport{
+		InstanceID:        instanceID,
+		NodeID:            a.NodeID,
+		StorageLimitBytes: limitBytes,
+		StorageUsedBytes:  usedBytes,
+		StorageUsedPct:    usedPct,
+		StorageState:      state,
+		StorageMessage:    msg,
+		CheckedAt:         now,
+	}
+}
+
+func readInstanceStorageLimit(instanceID string) string {
+	// Check for tier.json in instance data dir
+	paths := []string{
+		filepath.Join("/var/lib/admiral/instances", instanceID, "tier.json"),
+		filepath.Join("/var/lib/admiral/instances", instanceID, "instance.json"),
+	}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var meta struct {
+			Storage string `json:"storage"`
+		}
+		if err := json.Unmarshal(data, &meta); err != nil {
+			continue
+		}
+		return meta.Storage
+	}
+	return ""
+}
+
+func parseStorageLimitBytes(value string) int64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+
+	lower := strings.ToLower(value)
+	multiplier := int64(1)
+
+	switch {
+	case strings.HasSuffix(lower, "tib"), strings.HasSuffix(lower, "ti"), strings.HasSuffix(lower, "tb"):
+		multiplier = 1024 * 1024 * 1024 * 1024
+		value = value[:len(value)-2]
+	case strings.HasSuffix(lower, "t"):
+		multiplier = 1024 * 1024 * 1024 * 1024
+		value = value[:len(value)-1]
+	case strings.HasSuffix(lower, "gib"), strings.HasSuffix(lower, "gi"), strings.HasSuffix(lower, "gb"):
+		multiplier = 1024 * 1024 * 1024
+		value = value[:len(value)-2]
+	case strings.HasSuffix(lower, "g"):
+		multiplier = 1024 * 1024 * 1024
+		value = value[:len(value)-1]
+	case strings.HasSuffix(lower, "mib"), strings.HasSuffix(lower, "mi"), strings.HasSuffix(lower, "mb"):
+		multiplier = 1024 * 1024
+		value = value[:len(value)-2]
+	case strings.HasSuffix(lower, "m"):
+		multiplier = 1024 * 1024
+		value = value[:len(value)-1]
+	case strings.HasSuffix(lower, "kib"), strings.HasSuffix(lower, "ki"), strings.HasSuffix(lower, "kb"):
+		multiplier = 1024
+		value = value[:len(value)-2]
+	case strings.HasSuffix(lower, "k"):
+		multiplier = 1024
+		value = value[:len(value)-1]
+	}
+
+	num, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || num <= 0 {
+		return 0
+	}
+	return int64(num * float64(multiplier))
+}
+
+func findVolumeMountpoint(ctx context.Context, instanceID string) string {
+	cmd := exec.CommandContext(ctx, "podman", "volume", "ls", "--format", "{{.Name}}")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !strings.HasPrefix(name, "admiral-"+instanceID) {
+			continue
+		}
+
+		inspectCmd := exec.CommandContext(ctx, "podman", "volume", "inspect", name, "--format", "{{.Mountpoint}}")
+		mpOut, err := inspectCmd.Output()
+		if err != nil {
+			continue
+		}
+		mp := strings.TrimSpace(string(mpOut))
+		if mp != "" {
+			return mp
+		}
+	}
+	return ""
+}
+
+func measureDirUsage(ctx context.Context, dir string) int64 {
+	cmd := exec.CommandContext(ctx, "du", "-sb", dir)
+	out, err := cmd.Output()
+	if err != nil {
+		return -1
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)
+	if len(parts) < 1 {
+		return -1
+	}
+	bytes, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return -1
+	}
+	return bytes
+}
+
+func classifyStorageState(usedPct float64) (admiral.StorageState, string) {
+	switch {
+	case usedPct >= 90:
+		return admiral.StorageExceeded, fmt.Sprintf("storage usage reached %.1f%% (exceeded threshold)", usedPct)
+	case usedPct >= 80:
+		return admiral.StorageCritical, fmt.Sprintf("storage usage at %.1f%% (critical threshold)", usedPct)
+	case usedPct >= 60:
+		return admiral.StorageWarning, fmt.Sprintf("storage usage at %.1f%% (warning threshold)", usedPct)
+	default:
+		return admiral.StorageOK, ""
+	}
 }
 
 func (a *Agent) postHealth(report healthReport) error {
