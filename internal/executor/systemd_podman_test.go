@@ -85,6 +85,47 @@ func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 	}
 }
 
+func TestSystemdPodmanExecutorStartsPodUnitWithLimits(t *testing.T) {
+	runner := &fakeSystemdRunner{}
+	manager := systemd.NewManager(runner)
+	manager.Timeout = time.Second
+	exec := NewSystemdPodman(manager, nil, t.TempDir(), t.TempDir())
+
+	res := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:      "task_2",
+		OperationID: "op_2",
+		NodeID:      "node_1",
+		Action:      admiral.ActionStartApp,
+		InstanceID:  "demo002",
+		Tier: admiral.TierInfo{
+			CPU:    1,
+			Memory: "512MiB",
+		},
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "example.com/app:1"},
+			{Name: "db", Image: "docker.io/library/postgres:16", Volume: "db_data"},
+		},
+	}, "node_1")
+
+	if !res.Success {
+		t.Fatalf("expected success, got %q", res.Error)
+	}
+	// With tier limits, the pod unit should be started instead of individual container units
+	if len(runner.calls) < 2 {
+		t.Fatalf("expected at least 2 systemd calls, got %d", len(runner.calls))
+	}
+	got := runner.calls[1]
+	want := []string{"systemctl", "start", "admiral-demo002-pod.service"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected call: got %#v want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected call: got %#v want %#v", got, want)
+		}
+	}
+}
+
 func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 	runner := &fakeSystemdRunner{err: errors.New("unit not found")}
 	manager := systemd.NewManager(runner)

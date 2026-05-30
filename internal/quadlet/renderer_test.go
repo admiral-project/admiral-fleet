@@ -161,6 +161,86 @@ func TestRendererSingleServiceWithTierLimitsCreatesPod(t *testing.T) {
 	}
 }
 
+func TestFormatCPULimitEdgeCases(t *testing.T) {
+	tests := []struct {
+		cpu  float64
+		want string
+	}{
+		{0, ""},
+		{-1, ""},
+		{1, "1"},
+		{1.0, "1"},
+		{0.5, "0.5"},
+		{1.5, "1.5"},
+		{2.25, "2.25"},
+	}
+	for _, tc := range tests {
+		got := formatCPULimit(tc.cpu)
+		if got != tc.want {
+			t.Errorf("formatCPULimit(%v) = %q; want %q", tc.cpu, got, tc.want)
+		}
+	}
+}
+
+func TestFormatMemoryLimitEdgeCases(t *testing.T) {
+	tests := []struct {
+		val  string
+		want string
+	}{
+		{"", ""},
+		{"  ", ""},
+		{"1536MiB", "1536m"},
+		{"512Mi", "512m"},
+		{"1GiB", "1g"},
+		{"2Gi", "2g"},
+		{"1024MB", "1024m"},
+		{"1GB", "1g"},
+		{"1G", "1G"},
+		{"512M", "512M"},
+		{"unknown", "unknown"},
+	}
+	for _, tc := range tests {
+		got := formatMemoryLimit(tc.val)
+		if got != tc.want {
+			t.Errorf("formatMemoryLimit(%q) = %q; want %q", tc.val, got, tc.want)
+		}
+	}
+}
+
+func TestRendererNoLimitsSkipsCPUAndMemory(t *testing.T) {
+	quadletDir := t.TempDir()
+	dataDir := t.TempDir()
+	renderer := NewRenderer(quadletDir, dataDir)
+
+	task := admiral.FleetTask{
+		InstanceID: "nolimits",
+		Tier: admiral.TierInfo{
+			CPU:    0,
+			Memory: "",
+		},
+		Services: []admiral.ServiceInfo{
+			{Name: "web", Image: "docker.io/traefik/whoami:v1.10"},
+			{Name: "db", Image: "docker.io/library/postgres:16", Volume: "db_data"},
+		},
+	}
+
+	if err := renderer.Render(task); err != nil {
+		t.Fatalf("render quadlet: %v", err)
+	}
+
+	podData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-nolimits.pod"))
+	if err != nil {
+		t.Fatalf("read pod file: %v", err)
+	}
+	got := string(podData)
+	if strings.Contains(got, "PodmanArgs=--cpus") {
+		t.Fatal("unexpected --cpus in pod file when CPU=0")
+	}
+	if strings.Contains(got, "PodmanArgs=--memory") {
+		t.Fatal("unexpected --memory in pod file when Memory=\"\"")
+	}
+}
+
 func TestRenderVolume(t *testing.T) {
 	got := renderVolume("inst001", "db")
 	if !strings.Contains(got, "VolumeName=admiral-inst001-db") {
