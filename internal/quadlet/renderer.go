@@ -163,7 +163,11 @@ func (r *Renderer) renderPod(task admiral.FleetTask) string {
 func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string, usePod bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral service %s for instance %s\n\n", svc.Name, instanceID)
-	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\nEnvironmentFile=%s\n", containerName(instanceID, svc.Name), svc.Image, envPath)
+	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\n", containerName(instanceID, svc.Name), svc.Image)
+	if svc.Command != "" {
+		fmt.Fprintf(&b, "Exec=%s\n", svc.Command)
+	}
+	fmt.Fprintf(&b, "EnvironmentFile=%s\n", envPath)
 	if usePod {
 		fmt.Fprintf(&b, "Pod=%s\n", PodFileName(instanceID))
 		fmt.Fprintf(&b, "CgroupsMode=no-conmon\n")
