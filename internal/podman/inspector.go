@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,14 @@ type Inspector struct {
 
 func NewInspector(runner Runner) *Inspector {
 	return &Inspector{Runner: runner, Timeout: 30 * time.Second}
+}
+
+func (i *Inspector) PodPort(ctx context.Context, podName, containerPort string) (string, error) {
+	out, err := i.run(ctx, "port", podName, containerPort)
+	if err != nil {
+		return "", fmt.Errorf("get pod port %q for pod %q: %w", containerPort, podName, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (i *Inspector) PodExists(ctx context.Context, podName string) error {

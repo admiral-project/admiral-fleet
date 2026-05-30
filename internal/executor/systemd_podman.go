@@ -114,15 +114,35 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 	}
 	writeInstanceTierInfo(e.DataDir, task.InstanceID, task.Tier)
 
-	meta := map[string]interface{}{
-		"executor":   "systemd-podman",
-		"action":     "provision_app",
-		"host_ports": ports,
+	hostPorts := make(map[string]interface{})
+	for _, svc := range task.Services {
+		if svc.Port > 0 {
+			container := containerName(task.InstanceID, svc.Name)
+			var hostPort string
+			for retry := 0; retry < 10; retry++ {
+				p, err := e.podman().PodPort(ctx, container, fmt.Sprintf("%d/tcp", svc.Port))
+				if err == nil {
+					hostPort = p
+					if hostPort != "" {
+						break
+					}
+				}
+				select {
+				case <-ctx.Done():
+					break
+				case <-time.After(1 * time.Second):
+				}
+			}
+			if hostPort != "" {
+				hostPorts[svc.Name] = hostPort
+			}
+		}
 	}
-	metaBytes, _ := json.Marshal(meta)
+	hostPortsJSON, _ := json.Marshal(hostPorts)
+
 	result.Success = true
 	result.Logs = fmt.Sprintf("provisioned instance %s", task.InstanceID)
-	result.Metadata = string(metaBytes)
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"provision_app","host_ports":%s}`, string(hostPortsJSON))
 	return result
 }
 
