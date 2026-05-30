@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/agent"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/config"
@@ -38,17 +37,7 @@ func main() {
 	go fleetAgent.StartHealthChecker(context.Background())
 	go fleetAgent.StartStorageChecker(context.Background())
 
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			_ = fleetAgent.HandleTask
-		}
-	}()
-
-	if err := consumer.Consume(fleetAgent.HandleTask); err != nil {
-		log.Fatalf("consumer stopped: %v", err)
-	}
+	consumer.ConsumeLoop(fleetAgent.HandleTask)
 }
 
 func buildExecutor(cfg *config.Config) executor.Executor {
