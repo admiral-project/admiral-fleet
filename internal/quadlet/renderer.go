@@ -261,6 +261,9 @@ func defaultVolumeTarget(svc admiral.ServiceInfo) string {
 	if strings.Contains(img, "mariadb") || strings.Contains(img, "mysql") {
 		return "/var/lib/mysql"
 	}
+	if strings.Contains(img, "wordpress") {
+		return "/var/www/html/wp-content"
+	}
 	return "/data"
 }
 
