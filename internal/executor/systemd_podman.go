@@ -327,11 +327,6 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 }
 
 func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	if task.Backup == nil {
-		result.Success = false
-		result.Error = "backup metadata is required"
-		return result
-	}
 	volumes, err := e.collectVolumeTar(ctx, task)
 	if err != nil {
 		result.Success = false
@@ -496,62 +491,68 @@ func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task adm
 }
 
 func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admiral.FleetTask) ([]byte, error) {
-	if len(task.Services) == 0 {
-		return nil, fmt.Errorf("no services available for volume backup")
-	}
-	svc := task.Services[0]
-	if task.Backup != nil {
-		if named := findService(task.Services, task.Backup.Service); named.Name != "" {
-			svc = named
-		}
-	}
-	volName := volumeName(task.InstanceID, svc.Name)
-	inspect, err := e.podman().VolumeInspect(ctx, volName)
-	if err != nil {
-		return nil, fmt.Errorf("inspect volume %q: %w", volName, err)
-	}
-	mountpoint := extractMountPoint(inspect)
-	if mountpoint == "" {
-		return nil, fmt.Errorf("volume %q has no mountpoint", volName)
-	}
 	var buffer bytes.Buffer
 	zw := gzip.NewWriter(&buffer)
 	tw := tar.NewWriter(zw)
-	err = filepath.Walk(mountpoint, func(path string, info os.FileInfo, err error) error {
+
+	volumeServices := e.servicesWithVolumes(task)
+	if len(volumeServices) == 0 {
+		_ = tw.Close()
+		_ = zw.Close()
+		return nil, fmt.Errorf("no services with volumes for backup")
+	}
+
+	for _, svc := range volumeServices {
+		volName := volumeName(task.InstanceID, svc.Name)
+		inspect, err := e.podman().VolumeInspect(ctx, volName)
 		if err != nil {
-			return err
+			_ = tw.Close()
+			_ = zw.Close()
+			return nil, fmt.Errorf("inspect volume %q: %w", volName, err)
 		}
-		head, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
+		mountpoint := extractMountPoint(inspect)
+		if mountpoint == "" {
+			_ = tw.Close()
+			_ = zw.Close()
+			return nil, fmt.Errorf("volume %q has no mountpoint", volName)
 		}
-		rel, err := filepath.Rel(mountpoint, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		head.Name = rel
-		if err := tw.WriteHeader(head); err != nil {
-			return err
-		}
-		if info.Mode().IsRegular() {
-			f, err := os.Open(path)
+		prefix := svc.Name + "/"
+		err = filepath.Walk(mountpoint, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-			defer f.Close()
-			if _, err := io.Copy(tw, f); err != nil {
+			head, err := tar.FileInfoHeader(info, "")
+			if err != nil {
 				return err
 			}
+			rel, err := filepath.Rel(mountpoint, path)
+			if err != nil {
+				return err
+			}
+			if rel == "." {
+				return nil
+			}
+			head.Name = prefix + rel
+			if err := tw.WriteHeader(head); err != nil {
+				return err
+			}
+			if info.Mode().IsRegular() {
+				f, err := os.Open(path)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				if _, err := io.Copy(tw, f); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			_ = tw.Close()
+			_ = zw.Close()
+			return nil, fmt.Errorf("archive volume %q: %w", volName, err)
 		}
-		return nil
-	})
-	if err != nil {
-		_ = tw.Close()
-		_ = zw.Close()
-		return nil, fmt.Errorf("archive volume %q: %w", volName, err)
 	}
 	if err := tw.Close(); err != nil {
 		_ = zw.Close()
@@ -561,6 +562,16 @@ func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admir
 		return nil, fmt.Errorf("finalize compressed volume archive: %w", err)
 	}
 	return buffer.Bytes(), nil
+}
+
+func (e *SystemdPodmanExecutor) servicesWithVolumes(task admiral.FleetTask) []admiral.ServiceInfo {
+	var out []admiral.ServiceInfo
+	for _, svc := range task.Services {
+		if svc.Volume != "" {
+			out = append(out, svc)
+		}
+	}
+	return out
 }
 
 func extractMountPoint(raw []byte) string {
@@ -1020,28 +1031,75 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 }
 
 func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral.FleetTask, artifactPath string) error {
-	if task.Restore.Service == "" {
-		return fmt.Errorf("restore service is required")
-	}
-	svc := findService(task.Services, task.Restore.Service)
-	if svc.Name == "" {
-		return fmt.Errorf("restore service %q not found", task.Restore.Service)
-	}
-	volName := volumeName(task.InstanceID, svc.Name)
-	inspect, err := e.podman().VolumeInspect(ctx, volName)
-	if err != nil {
-		return fmt.Errorf("inspect volume %q: %w", volName, err)
-	}
-	mountpoint := extractMountPoint(inspect)
-	if mountpoint == "" {
-		return fmt.Errorf("volume %q has no mountpoint", volName)
-	}
 	data, err := os.ReadFile(artifactPath)
 	if err != nil {
 		return fmt.Errorf("read restore artifact: %w", err)
 	}
-	if err := e.extractGzipTarToDir(data, mountpoint); err != nil {
-		return err
+
+	targetServices := e.servicesWithVolumes(task)
+	if len(targetServices) == 0 {
+		return fmt.Errorf("no volume services found for restore")
+	}
+
+	for _, svc := range targetServices {
+		volName := volumeName(task.InstanceID, svc.Name)
+		inspect, err := e.podman().VolumeInspect(ctx, volName)
+		if err != nil {
+			return fmt.Errorf("inspect volume %q: %w", volName, err)
+		}
+		mountpoint := extractMountPoint(inspect)
+		if mountpoint == "" {
+			return fmt.Errorf("volume %q has no mountpoint", volName)
+		}
+		prefix := svc.Name + "/"
+		if err := e.extractGzipTarToDirFiltered(data, mountpoint, prefix); err != nil {
+			return fmt.Errorf("restore volume %q: %w", volName, err)
+		}
+	}
+	return nil
+}
+
+func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(data []byte, mountpoint, prefix string) error {
+	reader, err := gzip.NewReader(strings.NewReader(string(data)))
+	if err != nil {
+		return fmt.Errorf("open restore volume archive: %w", err)
+	}
+	defer reader.Close()
+	tarReader := tar.NewReader(reader)
+	for {
+		head, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read restore volume archive: %w", err)
+		}
+		if !strings.HasPrefix(head.Name, prefix) {
+			continue
+		}
+		rel := strings.TrimPrefix(head.Name, prefix)
+		targetPath := filepath.Join(mountpoint, filepath.Clean(rel))
+		if !strings.HasPrefix(targetPath, filepath.Clean(mountpoint)+string(os.PathSeparator)) && filepath.Clean(targetPath) != filepath.Clean(mountpoint) {
+			return fmt.Errorf("refuse to restore path outside mountpoint: %s", rel)
+		}
+		if head.FileInfo().IsDir() {
+			if err := os.MkdirAll(targetPath, head.FileInfo().Mode().Perm()); err != nil {
+				return fmt.Errorf("create restore directory %q: %w", targetPath, err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			return fmt.Errorf("prepare restore path %q: %w", targetPath, err)
+		}
+		out, err := os.Create(targetPath)
+		if err != nil {
+			return fmt.Errorf("create restore file %q: %w", targetPath, err)
+		}
+		if _, err := io.Copy(out, tarReader); err != nil {
+			out.Close()
+			return fmt.Errorf("write restore file %q: %w", targetPath, err)
+		}
+		_ = out.Close()
 	}
 	return nil
 }
