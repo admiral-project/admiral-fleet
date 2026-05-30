@@ -161,6 +161,97 @@ func TestRendererSingleServiceWithTierLimitsCreatesPod(t *testing.T) {
 	}
 }
 
+func TestFormatStorageLimit(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"", ""},
+		{"10G", "10G"},
+		{"10Gi", "10g"},
+		{"10GiB", "10g"},
+		{"10GB", "10g"},
+		{"10g", "10g"},
+		{"512M", "512M"},
+		{"512Mi", "512m"},
+		{"512MiB", "512m"},
+		{"512MB", "512m"},
+		{"1024K", "1024K"},
+		{"1024Ki", "1024k"},
+		{"1024KiB", "1024k"},
+		{"1T", "1T"},
+		{"1Ti", "1t"},
+		{"1TiB", "1t"},
+		{"1TB", "1t"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got := formatStorageLimit(tc.input)
+			if got != tc.expected {
+				t.Errorf("formatStorageLimit(%q) = %q, want %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestRenderVolumeWithStorageLimit(t *testing.T) {
+	got := renderVolume("inst001", "db", "10G")
+	if !strings.Contains(got, "Size=10G") {
+		t.Fatalf("expected Size=10G in volume file:\n%s", got)
+	}
+	if !strings.Contains(got, "VolumeName=admiral-inst001-db") {
+		t.Fatalf("expected VolumeName in volume file:\n%s", got)
+	}
+}
+
+func TestRenderVolumeWithoutStorageLimit(t *testing.T) {
+	got := renderVolume("inst001", "db", "")
+	if strings.Contains(got, "Size=") {
+		t.Fatalf("expected no Size= when storage is empty:\n%s", got)
+	}
+}
+
+func TestRendererWritesVolumeWithStorageLimit(t *testing.T) {
+	quadletDir := t.TempDir()
+	dataDir := t.TempDir()
+	renderer := NewRenderer(quadletDir, dataDir)
+
+	task := admiral.FleetTask{
+		InstanceID: "storagedemo",
+		Tier: admiral.TierInfo{
+			CPU:     1,
+			Memory:  "512MiB",
+			Storage: "5GiB",
+		},
+		Services: []admiral.ServiceInfo{
+			{
+				Name:   "app",
+				Image:  "docker.io/traefik/whoami:v1.10",
+				Port:   80,
+			},
+			{
+				Name:   "db",
+				Image:  "docker.io/library/postgres:16",
+				Volume: "db_data",
+			},
+		},
+	}
+
+	if err := renderer.Render(task); err != nil {
+		t.Fatalf("render quadlet: %v", err)
+	}
+
+	volData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-storagedemo-db.volume"))
+	if err != nil {
+		t.Fatalf("read volume file: %v", err)
+	}
+
+	got := string(volData)
+	if !strings.Contains(got, "Size=5g") {
+		t.Fatalf("expected Size=5g in volume file:\n%s", got)
+	}
+}
+
 func TestSafeName(t *testing.T) {
 	if got := SafeName("demo.001/example"); got != "demo-001-example" {
 		t.Fatalf("unexpected safe name %q", got)
