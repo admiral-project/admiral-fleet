@@ -45,7 +45,7 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 
 	for _, svc := range SortedServices(task.Services) {
 		if svc.Volume != "" {
-			if err := writeFile(filepath.Join(r.QuadletDir, VolumeFileName(task.InstanceID, svc.Name)), renderVolume(task.InstanceID, svc.Name, task.Tier.Storage), 0644); err != nil {
+			if err := writeFile(filepath.Join(r.QuadletDir, VolumeFileName(task.InstanceID, svc.Name)), renderVolume(task.InstanceID, svc.Name), 0644); err != nil {
 				return err
 			}
 		}
@@ -214,50 +214,11 @@ func formatMemoryLimit(value string) string {
 	return value
 }
 
-func renderVolume(instanceID, serviceName, storage string) string {
+func renderVolume(instanceID, serviceName string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Volume]\nVolumeName=%s\n", volumeName(instanceID, serviceName))
-	if s := formatStorageLimit(storage); s != "" {
-		fmt.Fprintf(&b, "Size=%s\n", s)
-	}
 	fmt.Fprintf(&b, "\n[Install]\nWantedBy=multi-user.target\n")
 	return b.String()
-}
-
-func formatStorageLimit(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-
-	lower := strings.ToLower(value)
-	switch {
-	case strings.HasSuffix(lower, "kib"):
-		return value[:len(value)-3] + "k"
-	case strings.HasSuffix(lower, "ki"):
-		return value[:len(value)-2] + "k"
-	case strings.HasSuffix(lower, "kb"):
-		return value[:len(value)-2] + "k"
-	case strings.HasSuffix(lower, "mib"):
-		return value[:len(value)-3] + "m"
-	case strings.HasSuffix(lower, "mi"):
-		return value[:len(value)-2] + "m"
-	case strings.HasSuffix(lower, "mb"):
-		return value[:len(value)-2] + "m"
-	case strings.HasSuffix(lower, "gib"):
-		return value[:len(value)-3] + "g"
-	case strings.HasSuffix(lower, "gi"):
-		return value[:len(value)-2] + "g"
-	case strings.HasSuffix(lower, "gb"):
-		return value[:len(value)-2] + "g"
-	case strings.HasSuffix(lower, "tib"):
-		return value[:len(value)-3] + "t"
-	case strings.HasSuffix(lower, "ti"):
-		return value[:len(value)-2] + "t"
-	case strings.HasSuffix(lower, "tb"):
-		return value[:len(value)-2] + "t"
-	}
-	return value
 }
 
 func renderEnv(svc admiral.ServiceInfo) string {
