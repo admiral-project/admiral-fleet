@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/agent"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/config"
@@ -36,6 +37,7 @@ func main() {
 	agent.StartHTTPServer(cfg.HTTPAddr, cfg.NodeID, cfg.Executor, cfg.PublicHost, cfg.PublicPort)
 	go fleetAgent.StartHealthChecker(context.Background())
 	go fleetAgent.StartStorageChecker(context.Background())
+	go fleetAgent.StartOutboxFlusher(context.Background(), 30*time.Second)
 
 	consumer.ConsumeLoop(fleetAgent.HandleTask)
 }

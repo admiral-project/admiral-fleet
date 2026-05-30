@@ -96,6 +96,20 @@ func (a *Agent) postStorage(report admiral.StorageReport) error {
 	return nil
 }
 
+func (a *Agent) StartOutboxFlusher(ctx context.Context, interval time.Duration) {
+	if a.outbox == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+			_ = a.outbox.flush(a.send)
+		}
+	}
+}
+
 func (a *Agent) send(result admiral.TaskResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
