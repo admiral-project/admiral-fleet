@@ -732,6 +732,19 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 	return nil
 }
 
+func (e *SystemdPodmanExecutor) chownRestoreDir(dir string) {
+	if e.RootlessUser == "" {
+		return
+	}
+	u, err := user.Lookup(e.RootlessUser)
+	if err != nil {
+		return
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+	os.Chown(dir, uid, gid)
+}
+
 func (e *SystemdPodmanExecutor) systemd() *systemd.Manager {
 	if e.Systemd != nil {
 		return e.Systemd
@@ -1227,9 +1240,10 @@ func (e *SystemdPodmanExecutor) expandGzipArtifact(path string, data []byte) (st
 		base = "/var/lib/admiral"
 	}
 	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("create restore staging dir: %w", err)
 	}
+	e.chownRestoreDir(dir)
 	rawPath := filepath.Join(dir, "artifact.raw")
 	rawFile, err := os.Create(rawPath)
 	if err != nil {
