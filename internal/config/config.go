@@ -30,22 +30,22 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		NodeID:         os.Getenv("ADMIRAL_FLEET_NODE_ID"),
-		RabbitMQURL:    getEnv("ADMIRAL_RABBITMQ_URL", "amqps://guest:guest@localhost:5671/"),
-		RabbitMQCAFile: os.Getenv("ADMIRAL_RABBITMQ_CA_FILE"),
-		APIURL:         getEnv("ADMIRAL_API_URL", "https://127.0.0.1:8080"),
-		APICACertFile:  os.Getenv("ADMIRAL_API_CA_FILE"),
-		SharedToken:    os.Getenv("ADMIRAL_SHARED_TOKEN"),
-		Executor:       getEnv("ADMIRAL_FLEET_EXECUTOR", "simulated"),
-		QuadletDir:     getEnv("ADMIRAL_FLEET_QUADLET_DIR", "/etc/containers/systemd/admiral"),
-		DataDir:        getEnv("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
-		CallbackOutbox:       getEnv("ADMIRAL_FLEET_CALLBACK_OUTBOX", "/var/lib/admiral/outbox"),
-		HTTPAddr:             getEnv("ADMIRAL_FLEET_HTTP_ADDR", "127.0.0.1:9099"),
-		PublicHost:           os.Getenv("ADMIRAL_FLEET_PUBLIC_HOST"),
-		PublicPort:           os.Getenv("ADMIRAL_FLEET_PUBLIC_PORT"),
-		StorageCheckInterval: getEnv("ADMIRAL_FLEET_STORAGE_CHECK_INTERVAL", "60s"),
+		NodeID:                os.Getenv("ADMIRAL_FLEET_NODE_ID"),
+		RabbitMQURL:           getEnv("ADMIRAL_RABBITMQ_URL", "amqps://guest:guest@localhost:5671/"),
+		RabbitMQCAFile:        os.Getenv("ADMIRAL_RABBITMQ_CA_FILE"),
+		APIURL:                getEnv("ADMIRAL_API_URL", "https://127.0.0.1:8080"),
+		APICACertFile:         os.Getenv("ADMIRAL_API_CA_FILE"),
+		SharedToken:           os.Getenv("ADMIRAL_SHARED_TOKEN"),
+		Executor:              getEnv("ADMIRAL_FLEET_EXECUTOR", "simulated"),
+		QuadletDir:            getEnv("ADMIRAL_FLEET_QUADLET_DIR", "/etc/containers/systemd/admiral"),
+		DataDir:               getEnv("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
+		CallbackOutbox:        getEnv("ADMIRAL_FLEET_CALLBACK_OUTBOX", "/var/lib/admiral/outbox"),
+		HTTPAddr:              getEnv("ADMIRAL_FLEET_HTTP_ADDR", "127.0.0.1:9099"),
+		PublicHost:            os.Getenv("ADMIRAL_FLEET_PUBLIC_HOST"),
+		PublicPort:            os.Getenv("ADMIRAL_FLEET_PUBLIC_PORT"),
+		StorageCheckInterval:  getEnv("ADMIRAL_FLEET_STORAGE_CHECK_INTERVAL", "60s"),
 		StorageExceededAction: getEnv("ADMIRAL_FLEET_STORAGE_EXCEEDED_ACTION", "report_only"),
-		RootlessUser:         os.Getenv("ADMIRAL_FLEET_ROOTLESS_USER"),
+		RootlessUser:          os.Getenv("ADMIRAL_FLEET_ROOTLESS_USER"),
 	}
 
 	if cfg.RootlessUser != "" {

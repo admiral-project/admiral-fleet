@@ -142,10 +142,12 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 	hostPorts := make(map[string]interface{})
 	for _, svc := range task.Services {
 		if svc.Port > 0 {
-			container := containerName(task.InstanceID, svc.Name)
+			// Use the infra container for port lookups — it starts immediately
+			// with the pod and always has the port mapping available.
+			infraContainer := containerName(task.InstanceID, "infra")
 			var hostPort string
 			for retry := 0; retry < 10; retry++ {
-				p, err := e.podman().PodPort(ctx, container, fmt.Sprintf("%d/tcp", svc.Port))
+				p, err := e.podman().PodPort(ctx, infraContainer, fmt.Sprintf("%d/tcp", svc.Port))
 				if err == nil {
 					hostPort = p
 					if hostPort != "" {
