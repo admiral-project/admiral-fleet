@@ -130,6 +130,18 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = fmt.Sprintf("reload systemd for instance %q: %v", task.InstanceID, err)
 		return result
 	}
+	for _, svc := range task.Services {
+		if svc.Registry != nil {
+			loginCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := e.podman().Login(loginCtx, svc.Registry.Server, svc.Registry.Username, svc.Registry.Password); err != nil {
+				cancel()
+				result.Success = false
+				result.Error = fmt.Sprintf("registry login for service %q: %v", svc.Name, err)
+				return result
+			}
+			cancel()
+		}
+	}
 	for _, unit := range unitNames(task) {
 		if err := e.systemd().Start(ctx, unit); err != nil {
 			result.Success = false

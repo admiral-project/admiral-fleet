@@ -41,6 +41,17 @@ func NewInspector(runner Runner) *Inspector {
 	return &Inspector{Runner: runner, Timeout: 30 * time.Second}
 }
 
+// Login authenticates to a private container registry using podman login.
+// Credentials are stored in the rootless user's auth.json for subsequent
+// image pulls by Quadlet or podman.
+func (i *Inspector) Login(ctx context.Context, server, username, password string) error {
+	_, err := i.run(ctx, "login", "-u", username, "-p", password, server)
+	if err != nil {
+		return fmt.Errorf("podman login to %q: %w", server, err)
+	}
+	return nil
+}
+
 func (i *Inspector) PodPort(ctx context.Context, podName, containerPort string) (string, error) {
 	out, err := i.run(ctx, "port", podName, containerPort)
 	if err != nil {
