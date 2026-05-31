@@ -29,7 +29,7 @@ func main() {
 	defer consumer.Close()
 
 	exec := buildExecutor(cfg)
-	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile, cfg.CallbackOutbox, cfg.StorageCheckInterval, cfg.StorageExceededAction, exec)
+	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.SharedToken, cfg.APICACertFile, cfg.CallbackOutbox, cfg.StorageCheckInterval, cfg.StorageExceededAction, cfg.RootlessUser, cfg.QuadletDir, exec)
 	if err != nil {
 		log.Fatalf("agent configuration error: %v", err)
 	}

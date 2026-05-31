@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -44,7 +45,7 @@ func (a *Agent) StartHealthChecker(ctx context.Context) {
 func (a *Agent) checkAllPods(ctx context.Context) {
 	runningPods := make(map[string]string)
 
-	pods, err := listAdmiralPods(ctx)
+	pods, err := a.listAdmiralPods(ctx)
 	if err != nil {
 		return
 	}
@@ -76,7 +77,7 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 		}
 	}
 
-	quadletPods := listQuadletPodFiles()
+	quadletPods := a.listQuadletPodFiles()
 	for _, instanceID := range quadletPods {
 		if _, ok := runningPods[instanceID]; !ok {
 			report := healthReport{
@@ -93,8 +94,12 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 	}
 }
 
-func listQuadletPodFiles() []string {
-	matches, err := filepath.Glob("/etc/containers/systemd/admiral/*.pod")
+func (a *Agent) listQuadletPodFiles() []string {
+	pattern := a.QuadletDir
+	if pattern == "" {
+		pattern = "/etc/containers/systemd/admiral"
+	}
+	matches, err := filepath.Glob(filepath.Join(pattern, "*.pod"))
 	if err != nil {
 		return nil
 	}
@@ -115,8 +120,8 @@ type podInfo struct {
 	Status string
 }
 
-func listAdmiralPods(ctx context.Context) ([]podInfo, error) {
-	cmd := exec.CommandContext(ctx, "podman", "pod", "ps", "--format", "{{.Name}}\t{{.Status}}")
+func (a *Agent) listAdmiralPods(ctx context.Context) ([]podInfo, error) {
+	cmd := a.podmanCommand(ctx, "pod", "ps", "--format", "{{.Name}}\t{{.Status}}")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("list pods: %w", err)
@@ -139,6 +144,21 @@ func listAdmiralPods(ctx context.Context) ([]podInfo, error) {
 		pods = append(pods, podInfo{Name: name, Status: status})
 	}
 	return pods, nil
+}
+
+func (a *Agent) podmanCommand(ctx context.Context, args ...string) *exec.Cmd {
+	if a.RootlessUser == "" {
+		return exec.CommandContext(ctx, "podman", args...)
+	}
+
+	// For rootless, run as the rootless user with XDG_RUNTIME_DIR set
+	u, err := user.Lookup(a.RootlessUser)
+	if err != nil {
+		return exec.CommandContext(ctx, "podman", args...)
+	}
+	xdgRuntimeDir := "/run/user/" + u.Uid
+	sudoArgs := append([]string{"-u", a.RootlessUser, "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
+	return exec.CommandContext(ctx, "sudo", sudoArgs...)
 }
 
 func extractInstanceID(podName string) string {
@@ -179,7 +199,7 @@ type instanceVolInfo struct {
 }
 
 func (a *Agent) checkInstanceStorage(ctx context.Context) {
-	instances := listQuadletPodFiles()
+	instances := a.listQuadletPodFiles()
 	if len(instances) == 0 {
 		return
 	}

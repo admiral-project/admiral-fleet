@@ -19,12 +19,14 @@ type Agent struct {
 	SharedToken           string
 	StorageCheckInterval  string
 	StorageExceededAction string
+	RootlessUser          string
+	QuadletDir            string
 	executor              executor.Executor
 	http                  *http.Client
 	outbox                *outbox
 }
 
-func New(nodeID, apiURL, sharedToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction string, exec executor.Executor) (*Agent, error) {
+func New(nodeID, apiURL, sharedToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir string, exec executor.Executor) (*Agent, error) {
 	if err := tlsconfig.ValidateURLScheme(apiURL, "https"); err != nil {
 		return nil, err
 	}
@@ -39,6 +41,8 @@ func New(nodeID, apiURL, sharedToken, caCertFile, outboxDir, storageCheckInterva
 		SharedToken:           sharedToken,
 		StorageCheckInterval:  storageCheckInterval,
 		StorageExceededAction: storageExceededAction,
+		RootlessUser:          rootlessUser,
+		QuadletDir:            quadletDir,
 		executor:              exec,
 		http: &http.Client{
 			Timeout: 10 * time.Second,

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -47,7 +46,7 @@ func (a *Agent) buildHeartbeat(ctx context.Context) admiral.HeartbeatRequest {
 	ip := detectLocalIP()
 	podmanV := detectPodmanVersion(ctx)
 	diskTotal, diskUsed := detectDiskUsage(ctx)
-	podsActive, podsPaused, podsFailed := countPodsByStatus(ctx)
+	podsActive, podsPaused, podsFailed := a.countPodsByStatus(ctx)
 
 	return admiral.HeartbeatRequest{
 		NodeID:        a.NodeID,
@@ -143,8 +142,8 @@ func detectDiskUsage(ctx context.Context) (totalBytes, usedBytes int64) {
 	return total, used
 }
 
-func countPodsByStatus(ctx context.Context) (active, paused, failed int) {
-	pods, err := listAdmiralPods(ctx)
+func (a *Agent) countPodsByStatus(ctx context.Context) (active, paused, failed int) {
+	pods, err := a.listAdmiralPods(ctx)
 	if err != nil {
 		return 0, 0, 0
 	}
@@ -159,12 +158,4 @@ func countPodsByStatus(ctx context.Context) (active, paused, failed int) {
 		}
 	}
 	return active, paused, failed
-}
-
-func countQuadletPodFiles() int {
-	matches, err := filepath.Glob("/etc/containers/systemd/admiral/*.pod")
-	if err != nil {
-		return 0
-	}
-	return len(matches)
 }
