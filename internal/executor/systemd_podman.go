@@ -24,18 +24,25 @@ import (
 )
 
 type SystemdPodmanExecutor struct {
-	Systemd  *systemd.Manager
-	Podman   *podman.Inspector
-	Renderer *quadlet.Renderer
-	DataDir  string
+	Systemd      *systemd.Manager
+	Podman       *podman.Inspector
+	Renderer     *quadlet.Renderer
+	DataDir      string
+	RootlessUser string // empty = rootful; set = rootless systemd --user target
 }
 
-func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir string) *SystemdPodmanExecutor {
+func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir, rootlessUser string) *SystemdPodmanExecutor {
+	rd := quadlet.NewRenderer(quadletDir, dataDir)
+	if rootlessUser != "" {
+		rd.UserMode = true
+	}
+
 	return &SystemdPodmanExecutor{
-		Systemd:  systemdManager,
-		Podman:   podmanInspector,
-		Renderer: quadlet.NewRenderer(quadletDir, dataDir),
-		DataDir:  dataDir,
+		Systemd:      systemdManager,
+		Podman:       podmanInspector,
+		Renderer:     rd,
+		DataDir:      dataDir,
+		RootlessUser: rootlessUser,
 	}
 }
 
@@ -660,7 +667,9 @@ func (e *SystemdPodmanExecutor) systemd() *systemd.Manager {
 	if e.Systemd != nil {
 		return e.Systemd
 	}
-	return systemd.NewManager(nil)
+	m := systemd.NewManager(nil)
+	m.RunAsUser = e.RootlessUser
+	return m
 }
 
 func (e *SystemdPodmanExecutor) podman() *podman.Inspector {
@@ -674,7 +683,11 @@ func (e *SystemdPodmanExecutor) renderer() *quadlet.Renderer {
 	if e.Renderer != nil {
 		return e.Renderer
 	}
-	return quadlet.NewRenderer("", "")
+	rd := quadlet.NewRenderer("", "")
+	if e.RootlessUser != "" {
+		rd.UserMode = true
+	}
+	return rd
 }
 
 func containerName(instanceID, serviceName string) string {

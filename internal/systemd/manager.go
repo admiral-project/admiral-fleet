@@ -29,8 +29,9 @@ func (r CommandRunner) Run(ctx context.Context, name string, args ...string) ([]
 }
 
 type Manager struct {
-	Runner  Runner
-	Timeout time.Duration
+	Runner     Runner
+	Timeout    time.Duration
+	RunAsUser  string // empty = rootful systemd; set = rootless user systemd --user
 }
 
 func NewManager(runner Runner) *Manager {
@@ -87,9 +88,17 @@ func (m *Manager) run(ctx context.Context, args ...string) ([]byte, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	name := "systemctl"
+	cmdArgs := args
+
+	if m.RunAsUser != "" {
+		name = "sudo"
+		cmdArgs = append([]string{"-u", m.RunAsUser, "systemctl", "--user"}, args...)
+	}
+
 	runner := m.Runner
 	if runner == nil {
 		runner = CommandRunner{}
 	}
-	return runner.Run(runCtx, "systemctl", args...)
+	return runner.Run(runCtx, name, cmdArgs...)
 }

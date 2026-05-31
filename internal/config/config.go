@@ -23,6 +23,7 @@ type Config struct {
 	PublicPort            string
 	StorageCheckInterval  string
 	StorageExceededAction string
+	RootlessUser          string // empty = rootful; set = rootless systemd --user target
 }
 
 func Load() (*Config, error) {
@@ -42,6 +43,7 @@ func Load() (*Config, error) {
 		PublicPort:           os.Getenv("ADMIRAL_FLEET_PUBLIC_PORT"),
 		StorageCheckInterval: getEnv("ADMIRAL_FLEET_STORAGE_CHECK_INTERVAL", "60s"),
 		StorageExceededAction: getEnv("ADMIRAL_FLEET_STORAGE_EXCEEDED_ACTION", "report_only"),
+		RootlessUser:         os.Getenv("ADMIRAL_FLEET_ROOTLESS_USER"),
 	}
 
 	if cfg.NodeID == "" {

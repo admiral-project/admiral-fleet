@@ -14,6 +14,14 @@ type Renderer struct {
 	QuadletDir string
 	DataDir    string
 	HostPorts  map[string]int // service name -> allocated host port
+	UserMode   bool           // true = rootless (WantedBy=default.target)
+}
+
+func (r *Renderer) wantedBy() string {
+	if r.UserMode {
+		return "default.target"
+	}
+	return "multi-user.target"
 }
 
 func NewRenderer(quadletDir, dataDir string) *Renderer {
@@ -45,7 +53,7 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 
 	for _, svc := range SortedServices(task.Services) {
 		if svc.Volume != "" {
-			if err := writeFile(filepath.Join(r.QuadletDir, VolumeFileName(task.InstanceID, svc.Name)), renderVolume(task.InstanceID, svc.Name), 0644); err != nil {
+			if err := writeFile(filepath.Join(r.QuadletDir, VolumeFileName(task.InstanceID, svc.Name)), renderVolume(task.InstanceID, svc.Name, r.wantedBy()), 0644); err != nil {
 				return err
 			}
 		}
@@ -156,7 +164,7 @@ func (r *Renderer) renderPod(task admiral.FleetTask) string {
 			}
 		}
 	}
-	b.WriteString("\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=multi-user.target\n")
+	fmt.Fprintf(&b, "\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=%s\n", r.wantedBy())
 	return b.String()
 }
 
@@ -218,10 +226,10 @@ func formatMemoryLimit(value string) string {
 	return value
 }
 
-func renderVolume(instanceID, serviceName string) string {
+func renderVolume(instanceID, serviceName, target string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Volume]\nVolumeName=%s\n", volumeName(instanceID, serviceName))
-	fmt.Fprintf(&b, "\n[Install]\nWantedBy=multi-user.target\n")
+	fmt.Fprintf(&b, "\n[Install]\nWantedBy=%s\n", target)
 	return b.String()
 }
 

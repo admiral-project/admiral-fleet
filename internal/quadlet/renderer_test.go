@@ -242,7 +242,7 @@ func TestRendererNoLimitsSkipsCPUAndMemory(t *testing.T) {
 }
 
 func TestRenderVolume(t *testing.T) {
-	got := renderVolume("inst001", "db")
+	got := renderVolume("inst001", "db", "multi-user.target")
 	if !strings.Contains(got, "VolumeName=admiral-inst001-db") {
 		t.Fatalf("expected VolumeName in volume file:\n%s", got)
 	}

@@ -45,7 +45,7 @@ func main() {
 func buildExecutor(cfg *config.Config) executor.Executor {
 	switch cfg.Executor {
 	case "systemd-podman":
-		return executor.NewSystemdPodman(nil, nil, cfg.QuadletDir, cfg.DataDir)
+		return executor.NewSystemdPodman(nil, nil, cfg.QuadletDir, cfg.DataDir, cfg.RootlessUser)
 	default:
 		return executor.NewSimulated()
 	}

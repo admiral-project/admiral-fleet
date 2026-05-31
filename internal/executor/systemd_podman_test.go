@@ -53,7 +53,7 @@ func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 	runner := &fakeSystemdRunner{}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodman(manager, nil, t.TempDir(), t.TempDir())
+	exec := NewSystemdPodman(manager, nil, t.TempDir(), t.TempDir(), "")
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
@@ -89,7 +89,7 @@ func TestSystemdPodmanExecutorStartsPodUnitWithLimits(t *testing.T) {
 	runner := &fakeSystemdRunner{}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodman(manager, nil, t.TempDir(), t.TempDir())
+	exec := NewSystemdPodman(manager, nil, t.TempDir(), t.TempDir(), "")
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_2",
@@ -130,7 +130,7 @@ func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 	runner := &fakeSystemdRunner{err: errors.New("unit not found")}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodman(manager, nil, "", "")
+	exec := NewSystemdPodman(manager, nil, "", "", "")
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
@@ -152,7 +152,7 @@ func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 }
 
 func TestSystemdPodmanExecutorRejectsInvalidProvision(t *testing.T) {
-	exec := NewSystemdPodman(nil, nil, t.TempDir(), t.TempDir())
+	exec := NewSystemdPodman(nil, nil, t.TempDir(), t.TempDir(), "")
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		NodeID:     "node_1",
 		Action:     admiral.ActionProvisionApp,
@@ -167,7 +167,7 @@ func TestSystemdPodmanExecutorRejectsInvalidProvision(t *testing.T) {
 func TestSystemdPodmanExecutorInspectAppSnapshot(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodman(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), t.TempDir(), t.TempDir())
+	exec := NewSystemdPodman(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), t.TempDir(), t.TempDir(), "")
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
