@@ -568,13 +568,11 @@ func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task adm
 
 func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admiral.FleetTask) ([]byte, error) {
 	var buffer bytes.Buffer
-	zw := gzip.NewWriter(&buffer)
-	tw := tar.NewWriter(zw)
+	tw := tar.NewWriter(&buffer)
 
 	volumeServices := e.servicesWithVolumes(task)
 	if len(volumeServices) == 0 {
 		_ = tw.Close()
-		_ = zw.Close()
 		return nil, fmt.Errorf("no services with volumes for backup")
 	}
 
@@ -583,13 +581,11 @@ func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admir
 		inspect, err := e.podman().VolumeInspect(ctx, volName)
 		if err != nil {
 			_ = tw.Close()
-			_ = zw.Close()
 			return nil, fmt.Errorf("inspect volume %q: %w", volName, err)
 		}
 		mountpoint := extractMountPoint(inspect)
 		if mountpoint == "" {
 			_ = tw.Close()
-			_ = zw.Close()
 			return nil, fmt.Errorf("volume %q has no mountpoint", volName)
 		}
 		prefix := svc.Name + "/"
@@ -626,16 +622,11 @@ func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admir
 		})
 		if err != nil {
 			_ = tw.Close()
-			_ = zw.Close()
 			return nil, fmt.Errorf("archive volume %q: %w", volName, err)
 		}
 	}
 	if err := tw.Close(); err != nil {
-		_ = zw.Close()
 		return nil, fmt.Errorf("finalize volume archive: %w", err)
-	}
-	if err := zw.Close(); err != nil {
-		return nil, fmt.Errorf("finalize compressed volume archive: %w", err)
 	}
 	return buffer.Bytes(), nil
 }
