@@ -38,7 +38,7 @@ func (a *Agent) StartHeartbeatSender(ctx context.Context) {
 func (a *Agent) sendHeartbeat(ctx context.Context) {
 	req := a.buildHeartbeat(ctx)
 	if err := a.postHeartbeat(req); err != nil {
-		_ = err
+		fmt.Fprintf(os.Stderr, "heartbeat error: %v\n", err)
 	}
 }
 
