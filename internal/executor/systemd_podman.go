@@ -37,6 +37,13 @@ func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.I
 	rd := quadlet.NewRenderer(quadletDir, dataDir)
 	if rootlessUser != "" {
 		rd.UserMode = true
+		// Ensure data dir is traversable for rootless user
+		for _, dir := range []string{dataDir, filepath.Join(dataDir, "instances")} {
+			if err := os.MkdirAll(dir, 0751); err != nil {
+				break
+			}
+			_ = os.Chmod(dir, 0751)
+		}
 	}
 
 	return &SystemdPodmanExecutor{
@@ -690,12 +697,21 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 		dataDir = "/var/lib/admiral"
 	}
 	instDir := filepath.Join(dataDir, "instances", instanceID)
-	return filepath.Walk(instDir, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(instDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		return os.Chown(path, uid, gid)
-	})
+	}); err != nil {
+		return err
+	}
+	// Ensure rootless user can traverse to the instance env files
+	for _, dir := range []string{dataDir, filepath.Join(dataDir, "instances")} {
+		if err := os.Chmod(dir, 0751); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("chmod %q for rootless traversal: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 func (e *SystemdPodmanExecutor) systemd() *systemd.Manager {
