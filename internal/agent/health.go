@@ -26,7 +26,7 @@ type healthReport struct {
 }
 
 func (a *Agent) StartHealthChecker(ctx context.Context) {
-	time.Sleep(30 * time.Second)
+	a.checkAllPods(ctx)
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
