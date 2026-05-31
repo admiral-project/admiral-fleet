@@ -172,10 +172,10 @@ func (a *Agent) StartStorageChecker(ctx context.Context) {
 }
 
 type instanceVolInfo struct {
-	InstanceID    string
-	VolumeName    string
-	Mountpoint    string
-	StorageLimit  int64
+	InstanceID   string
+	VolumeName   string
+	Mountpoint   string
+	StorageLimit int64
 }
 
 func (a *Agent) checkInstanceStorage(ctx context.Context) {
@@ -205,11 +205,11 @@ func (a *Agent) measureInstanceStorage(ctx context.Context, instanceID string) *
 	}
 	if limitBytes <= 0 {
 		return &admiral.StorageReport{
-			InstanceID:        instanceID,
-			NodeID:            a.NodeID,
-			StorageState:      admiral.StorageUnknown,
-			StorageMessage:    "no storage limit configured",
-			CheckedAt:         now,
+			InstanceID:     instanceID,
+			NodeID:         a.NodeID,
+			StorageState:   admiral.StorageUnknown,
+			StorageMessage: "no storage limit configured",
+			CheckedAt:      now,
 		}
 	}
 

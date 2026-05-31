@@ -31,9 +31,9 @@ func (r CommandRunner) Run(ctx context.Context, name string, args ...string) ([]
 }
 
 type Manager struct {
-	Runner     Runner
-	Timeout    time.Duration
-	RunAsUser  string // empty = rootful systemd; set = rootless user systemd --user
+	Runner    Runner
+	Timeout   time.Duration
+	RunAsUser string // empty = rootful systemd; set = rootless user systemd --user
 }
 
 func NewManager(runner Runner) *Manager {
