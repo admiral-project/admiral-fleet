@@ -537,7 +537,11 @@ func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task adm
 	if !ok || strings.TrimSpace(password) == "" {
 		return nil, fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
 	}
-	return e.podman().Exec(ctx, containerName(task.InstanceID, svc.Name), "env", fmt.Sprintf("MYSQL_PWD=%s", password), "mysqldump", "--single-transaction", "--quick", "--routines", "--events", "--triggers", "--skip-lock-tables", "-u", username, databaseName)
+	dumpCmd := "mysqldump"
+	if strings.EqualFold(task.Backup.DatabaseType, "mariadb") {
+		dumpCmd = "mariadb-dump"
+	}
+	return e.podman().Exec(ctx, containerName(task.InstanceID, svc.Name), "env", fmt.Sprintf("MYSQL_PWD=%s", password), dumpCmd, "--single-transaction", "--quick", "--routines", "--events", "--triggers", "--skip-lock-tables", "-u", username, databaseName)
 }
 
 func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admiral.FleetTask) ([]byte, error) {
@@ -1070,8 +1074,12 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 
 	dbEngine := normalizeDatabaseType(task.Restore.DatabaseType)
 	if dbEngine == "mysql" || dbEngine == "mariadb" {
+		pingCmd := "mysqladmin"
+		if dbEngine == "mariadb" {
+			pingCmd = "mariadb-admin"
+		}
 		for i := 0; i < 15; i++ {
-			out, err := e.podman().Exec(ctx, container, "mysqladmin", "ping", "-u", username, fmt.Sprintf("-p%s", password), "--silent")
+			out, err := e.podman().Exec(ctx, container, pingCmd, "ping", "-u", username, fmt.Sprintf("-p%s", password), "--silent")
 			if err == nil && strings.TrimSpace(string(out)) == "mysqld is alive" {
 				break
 			}
@@ -1108,9 +1116,13 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 
 	switch dbEngine {
 	case "mysql", "mariadb":
-		cmd := fmt.Sprintf("MYSQL_PWD='%s' mysql -u %s %s < /tmp/admiral-restore.dump", password, username, databaseName)
+		restoreCmd := "mysql"
+		if dbEngine == "mariadb" {
+			restoreCmd = "mariadb"
+		}
+		cmd := fmt.Sprintf("MYSQL_PWD='%s' %s -u %s %s < /tmp/admiral-restore.dump", password, restoreCmd, username, databaseName)
 		if _, err := e.podman().Exec(ctx, container, "/bin/sh", "-c", cmd); err != nil {
-			return fmt.Errorf("run mysql restore in container %q: %w", container, err)
+			return fmt.Errorf("run %s restore in container %q: %w", restoreCmd, container, err)
 		}
 	default:
 		if _, err := e.podman().Exec(ctx, container, "env", fmt.Sprintf("PGPASSWORD=%s", password), "pg_restore", "-Fc", "-U", username, "-d", databaseName, "/tmp/admiral-restore.dump"); err != nil {

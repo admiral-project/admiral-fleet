@@ -265,7 +265,7 @@ func volumeName(instanceID, serviceName string) string {
 
 func defaultVolumeTarget(svc admiral.ServiceInfo) string {
 	img := strings.ToLower(svc.Image)
-	if svc.Name == "db" || strings.Contains(img, "postgres") {
+	if strings.Contains(img, "postgres") {
 		return "/var/lib/postgresql/data"
 	}
 	if strings.Contains(img, "mariadb") || strings.Contains(img, "mysql") {
@@ -273,6 +273,9 @@ func defaultVolumeTarget(svc admiral.ServiceInfo) string {
 	}
 	if strings.Contains(img, "wordpress") {
 		return "/var/www/html/wp-content"
+	}
+	if svc.Name == "db" {
+		return "/var/lib/postgresql/data"
 	}
 	return "/data"
 }
