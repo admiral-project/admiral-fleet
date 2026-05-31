@@ -8,6 +8,7 @@ import (
 func TestLoadRequiresTLSURLs(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_NODE_ID", "node-1")
 	setEnv(t, "ADMIRAL_SHARED_TOKEN", "token")
+	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "http://127.0.0.1:8080")
 	setEnv(t, "ADMIRAL_RABBITMQ_URL", "amqps://guest:guest@localhost:5671/")
 
@@ -20,6 +21,7 @@ func TestLoadRequiresTLSURLs(t *testing.T) {
 func TestLoadAcceptsSecureURLs(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_NODE_ID", "node-1")
 	setEnv(t, "ADMIRAL_SHARED_TOKEN", "token")
+	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
 	setEnv(t, "ADMIRAL_RABBITMQ_URL", "amqps://guest:guest@localhost:5671/")
 
@@ -38,6 +40,7 @@ func TestLoadAcceptsSecureURLs(t *testing.T) {
 func TestLoadAcceptsSystemdPodmanExecutor(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_NODE_ID", "node-1")
 	setEnv(t, "ADMIRAL_SHARED_TOKEN", "token")
+	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
 	setEnv(t, "ADMIRAL_RABBITMQ_URL", "amqps://guest:guest@localhost:5671/")
 	setEnv(t, "ADMIRAL_FLEET_EXECUTOR", "systemd-podman")
@@ -59,6 +62,7 @@ func TestLoadAcceptsSystemdPodmanExecutor(t *testing.T) {
 func TestLoadRejectsUnknownExecutor(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_NODE_ID", "node-1")
 	setEnv(t, "ADMIRAL_SHARED_TOKEN", "token")
+	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
 	setEnv(t, "ADMIRAL_RABBITMQ_URL", "amqps://guest:guest@localhost:5671/")
 	setEnv(t, "ADMIRAL_FLEET_EXECUTOR", "shell")

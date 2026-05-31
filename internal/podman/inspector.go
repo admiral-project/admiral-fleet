@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -30,8 +32,9 @@ func (r CommandRunner) Run(ctx context.Context, name string, args ...string) ([]
 }
 
 type Inspector struct {
-	Runner  Runner
-	Timeout time.Duration
+	Runner       Runner
+	Timeout      time.Duration
+	RootlessUser string // empty = run as root; set = run via sudo -u
 }
 
 func NewInspector(runner Runner) *Inspector {
@@ -104,9 +107,30 @@ func (i *Inspector) run(ctx context.Context, args ...string) ([]byte, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	if i.RootlessUser != "" {
+		return i.runAsUser(runCtx, args...)
+	}
+
 	runner := i.Runner
 	if runner == nil {
 		runner = CommandRunner{}
 	}
 	return runner.Run(runCtx, "podman", args...)
+}
+
+func (i *Inspector) runAsUser(ctx context.Context, args ...string) ([]byte, error) {
+	u, err := user.Lookup(i.RootlessUser)
+	if err != nil {
+		return nil, fmt.Errorf("lookup rootless user %q: %w", i.RootlessUser, err)
+	}
+	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
+	// Use sudo to run podman as the rootless user, with XDG_RUNTIME_DIR set
+	// so podman can find the user's runtime directory (rootless containers).
+	sudoArgs := append([]string{"-u", i.RootlessUser, "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
+
+	runner := i.Runner
+	if runner == nil {
+		runner = CommandRunner{}
+	}
+	return runner.Run(ctx, "sudo", sudoArgs...)
 }

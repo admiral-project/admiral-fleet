@@ -25,7 +25,7 @@ type Config struct {
 	PublicPort            string
 	StorageCheckInterval  string
 	StorageExceededAction string
-	RootlessUser          string // empty = rootful; set = rootless systemd --user target
+	RootlessUser          string // required: Admiral only supports rootless workloads
 }
 
 func Load() (*Config, error) {
@@ -63,6 +63,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.SharedToken == "" {
 		return nil, fmt.Errorf("ADMIRAL_SHARED_TOKEN is required")
+	}
+	if cfg.RootlessUser == "" {
+		return nil, fmt.Errorf("ADMIRAL_FLEET_ROOTLESS_USER is required: Admiral only supports rootless workloads")
 	}
 	if err := tlsconfig.ValidateURLScheme(cfg.APIURL, "https"); err != nil {
 		return nil, fmt.Errorf("invalid ADMIRAL_API_URL: %w", err)

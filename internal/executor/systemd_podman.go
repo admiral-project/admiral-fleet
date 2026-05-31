@@ -35,9 +35,8 @@ type SystemdPodmanExecutor struct {
 
 func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir, rootlessUser string) *SystemdPodmanExecutor {
 	rd := quadlet.NewRenderer(quadletDir, dataDir)
+	// Ensure data dir is traversable for rootless user
 	if rootlessUser != "" {
-		rd.UserMode = true
-		// Ensure data dir is traversable for rootless user
 		for _, dir := range []string{dataDir, filepath.Join(dataDir, "instances")} {
 			if err := os.MkdirAll(dir, 0751); err != nil {
 				break
@@ -65,6 +64,11 @@ func (e *SystemdPodmanExecutor) Execute(ctx context.Context, task admiral.FleetT
 	if !isAllowedAction(task.Action) {
 		result.Success = false
 		result.Error = fmt.Sprintf("unsupported action %q", task.Action)
+		return result
+	}
+	if strings.TrimSpace(e.RootlessUser) == "" {
+		result.Success = false
+		result.Error = "rootlessUser is required: Admiral requires rootless workloads"
 		return result
 	}
 
@@ -725,20 +729,19 @@ func (e *SystemdPodmanExecutor) systemd() *systemd.Manager {
 
 func (e *SystemdPodmanExecutor) podman() *podman.Inspector {
 	if e.Podman != nil {
+		e.Podman.RootlessUser = e.RootlessUser
 		return e.Podman
 	}
-	return podman.NewInspector(nil)
+	insp := podman.NewInspector(nil)
+	insp.RootlessUser = e.RootlessUser
+	return insp
 }
 
 func (e *SystemdPodmanExecutor) renderer() *quadlet.Renderer {
 	if e.Renderer != nil {
 		return e.Renderer
 	}
-	rd := quadlet.NewRenderer("", "")
-	if e.RootlessUser != "" {
-		rd.UserMode = true
-	}
-	return rd
+	return quadlet.NewRenderer("", "")
 }
 
 func containerName(instanceID, serviceName string) string {

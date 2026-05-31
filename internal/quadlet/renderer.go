@@ -14,14 +14,12 @@ type Renderer struct {
 	QuadletDir string
 	DataDir    string
 	HostPorts  map[string]int // service name -> allocated host port
-	UserMode   bool           // true = rootless (WantedBy=default.target)
 }
 
+// wantedBy returns the systemd target for Quadlet [Install] sections.
+// Admiral always runs workloads rootless, so only user-level targets are used.
 func (r *Renderer) wantedBy() string {
-	if r.UserMode {
-		return "default.target"
-	}
-	return "multi-user.target"
+	return "default.target"
 }
 
 func NewRenderer(quadletDir, dataDir string) *Renderer {

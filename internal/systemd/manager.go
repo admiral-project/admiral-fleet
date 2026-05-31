@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"time"
 )
 
@@ -88,17 +90,31 @@ func (m *Manager) run(ctx context.Context, args ...string) ([]byte, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	if m.RunAsUser != "" {
+		return m.runAsUser(runCtx, args...)
+	}
+
 	name := "systemctl"
 	cmdArgs := args
-
-	if m.RunAsUser != "" {
-		name = "sudo"
-		cmdArgs = append([]string{"-u", m.RunAsUser, "systemctl", "--user"}, args...)
-	}
 
 	runner := m.Runner
 	if runner == nil {
 		runner = CommandRunner{}
 	}
 	return runner.Run(runCtx, name, cmdArgs...)
+}
+
+func (m *Manager) runAsUser(ctx context.Context, args ...string) ([]byte, error) {
+	u, err := user.Lookup(m.RunAsUser)
+	if err != nil {
+		return nil, fmt.Errorf("lookup rootless user %q: %w", m.RunAsUser, err)
+	}
+	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
+	sudoArgs := append([]string{"-u", m.RunAsUser, "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "systemctl", "--user"}, args...)
+
+	runner := m.Runner
+	if runner == nil {
+		runner = CommandRunner{}
+	}
+	return runner.Run(ctx, "sudo", sudoArgs...)
 }
