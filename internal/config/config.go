@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/user"
+	"path/filepath"
 
 	"github.com/admiral-project/admiral/admirald/pkg/admiral/tlsconfig"
 )
@@ -44,6 +46,16 @@ func Load() (*Config, error) {
 		StorageCheckInterval: getEnv("ADMIRAL_FLEET_STORAGE_CHECK_INTERVAL", "60s"),
 		StorageExceededAction: getEnv("ADMIRAL_FLEET_STORAGE_EXCEEDED_ACTION", "report_only"),
 		RootlessUser:         os.Getenv("ADMIRAL_FLEET_ROOTLESS_USER"),
+	}
+
+	if cfg.RootlessUser != "" {
+		if cfg.QuadletDir == "/etc/containers/systemd/admiral" {
+			u, err := user.Lookup(cfg.RootlessUser)
+			if err != nil {
+				return nil, fmt.Errorf("lookup rootless user %q: %w", cfg.RootlessUser, err)
+			}
+			cfg.QuadletDir = filepath.Join("/etc/containers/systemd/users", u.Uid, "admiral")
+		}
 	}
 
 	if cfg.NodeID == "" {
