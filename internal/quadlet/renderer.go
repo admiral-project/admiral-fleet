@@ -58,7 +58,7 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 			}
 		}
 		envPath := filepath.Join(envDir, svc.Name+".env")
-		if err := writeFile(envPath, renderEnv(svc), 0600); err != nil {
+		if err := writeFile(envPath, renderEnv(svc), 0640); err != nil {
 			return err
 		}
 		if err := writeFile(filepath.Join(r.QuadletDir, ContainerFileName(task.InstanceID, svc.Name)), r.renderContainer(task.InstanceID, svc, envPath, usePod), 0644); err != nil {
@@ -191,7 +191,7 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	if svc.Volume != "" {
 		fmt.Fprintf(&b, "Volume=%s:%s\n", VolumeFileName(instanceID, svc.Name), defaultVolumeTarget(svc))
 	}
-	b.WriteString("\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=multi-user.target\n")
+	fmt.Fprintf(&b, "\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=%s\n", r.wantedBy())
 	return b.String()
 }
 

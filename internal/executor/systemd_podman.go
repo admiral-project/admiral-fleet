@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,6 +109,11 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = fmt.Sprintf("render quadlet for instance %q: %v", task.InstanceID, err)
 		return result
 	}
+	if err := e.chownInstanceData(task.InstanceID); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("chown instance data for %q: %v", task.InstanceID, err)
+		return result
+	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("reload systemd for instance %q: %v", task.InstanceID, err)
@@ -160,6 +167,11 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 	if err := r.Render(task); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("render quadlet on start for instance %q: %v", task.InstanceID, err)
+		return result
+	}
+	if err := e.chownInstanceData(task.InstanceID); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("chown instance data on start for %q: %v", task.InstanceID, err)
 		return result
 	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {
@@ -663,6 +675,29 @@ func validateProvisionTask(task admiral.FleetTask) error {
 	return nil
 }
 
+func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
+	if e.RootlessUser == "" {
+		return nil
+	}
+	u, err := user.Lookup(e.RootlessUser)
+	if err != nil {
+		return fmt.Errorf("lookup rootless user %q: %w", e.RootlessUser, err)
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+	dataDir := e.DataDir
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = "/var/lib/admiral"
+	}
+	instDir := filepath.Join(dataDir, "instances", instanceID)
+	return filepath.Walk(instDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chown(path, uid, gid)
+	})
+}
+
 func (e *SystemdPodmanExecutor) systemd() *systemd.Manager {
 	if e.Systemd != nil {
 		return e.Systemd
@@ -802,6 +837,9 @@ func (e *SystemdPodmanExecutor) startRestoreContainers(ctx context.Context, task
 	r.HostPorts = ports
 	if err := r.Render(task); err != nil {
 		return fmt.Errorf("render quadlet for restore: %w", err)
+	}
+	if err := e.chownInstanceData(task.InstanceID); err != nil {
+		return fmt.Errorf("chown instance data for restore: %w", err)
 	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {
 		return fmt.Errorf("daemon-reload for restore: %w", err)
