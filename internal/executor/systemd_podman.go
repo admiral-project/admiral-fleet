@@ -370,9 +370,13 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 		result.Logs = fmt.Sprintf("%s database backup stored at %s and uploaded to S3", databaseType, path)
 	}
 
+	backupID := ""
+	if task.Storage != nil {
+		backupID = task.Storage.BackupID
+	}
 	checksum := sha256Hex(data)
 	result.Success = true
-	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":"","backup_type":"database","database_type":%q,"storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, databaseType, path, len(data), checksum, time.Now().UTC().Format(time.RFC3339))
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"database","database_type":%q,"storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, databaseType, path, len(data), checksum, time.Now().UTC().Format(time.RFC3339))
 	return result
 }
 
@@ -397,10 +401,14 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 		result.Logs = fmt.Sprintf("volume backup stored at %s and uploaded to S3", path)
 	}
 
+	backupID := ""
+	if task.Storage != nil {
+		backupID = task.Storage.BackupID
+	}
 	checksum := sha256Hex(volumes)
 	result.Success = true
 	result.Logs = fmt.Sprintf("volume backup stored at %s", path)
-	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":"","backup_type":"volume","storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, path, len(volumes), checksum, time.Now().UTC().Format(time.RFC3339))
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"volume","storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, path, len(volumes), checksum, time.Now().UTC().Format(time.RFC3339))
 	return result
 }
 
