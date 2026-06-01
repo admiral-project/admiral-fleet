@@ -12,12 +12,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/osutil"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/storage"
@@ -29,19 +29,25 @@ type SystemdPodmanExecutor struct {
 	Systemd      *systemd.Manager
 	Podman       *podman.Inspector
 	Renderer     *quadlet.Renderer
+	FS           osutil.FileSystem
+	UserLookup   osutil.UserLookup
 	DataDir      string
 	RootlessUser string // empty = rootful; set = rootless systemd --user target
 }
 
 func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir, rootlessUser string) *SystemdPodmanExecutor {
+	return NewSystemdPodmanWithFS(systemdManager, podmanInspector, quadletDir, dataDir, rootlessUser, osutil.RealFileSystem{}, osutil.RealUserLookup{})
+}
+
+func NewSystemdPodmanWithFS(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir, rootlessUser string, fs osutil.FileSystem, userLookup osutil.UserLookup) *SystemdPodmanExecutor {
 	rd := quadlet.NewRenderer(quadletDir, dataDir)
 	// Ensure data dir is traversable for rootless user
 	if rootlessUser != "" {
 		for _, dir := range []string{dataDir, filepath.Join(dataDir, "instances")} {
-			if err := os.MkdirAll(dir, 0751); err != nil {
+			if err := fs.MkdirAll(dir, 0751); err != nil {
 				break
 			}
-			_ = os.Chmod(dir, 0751)
+			_ = fs.Chmod(dir, 0751)
 		}
 	}
 
@@ -49,6 +55,8 @@ func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.I
 		Systemd:      systemdManager,
 		Podman:       podmanInspector,
 		Renderer:     rd,
+		FS:           fs,
+		UserLookup:   userLookup,
 		DataDir:      dataDir,
 		RootlessUser: rootlessUser,
 	}
@@ -107,7 +115,7 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = err.Error()
 		return result
 	}
-	ports, err := allocateHostPorts(e.DataDir, task.InstanceID, task.Services)
+	ports, err := e.allocateHostPorts(e.DataDir, task.InstanceID, task.Services)
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("allocate host ports for instance %q: %v", task.InstanceID, err)
@@ -149,7 +157,7 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 			return result
 		}
 	}
-	writeInstanceTierInfo(e.DataDir, task.InstanceID, task.Tier)
+	e.writeInstanceTierInfo(e.DataDir, task.InstanceID, task.Tier)
 
 	hostPorts := make(map[string]int)
 	for _, svc := range task.Services {
@@ -186,7 +194,7 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 }
 
 func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	ports := loadHostPorts(e.DataDir, task.InstanceID)
+	ports := e.loadHostPorts(e.DataDir, task.InstanceID)
 	r := e.renderer()
 	r.HostPorts = ports
 	if err := r.Render(task); err != nil {
@@ -274,7 +282,7 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 		dataDir = "/var/lib/admiral"
 	}
 	instDir := filepath.Join(dataDir, "instances", task.InstanceID)
-	if err := os.RemoveAll(instDir); err != nil {
+	if err := e.FS.RemoveAll(instDir); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("clean up instance data dir %q: %v", instDir, err)
 		return result
@@ -468,14 +476,14 @@ func (e *SystemdPodmanExecutor) deleteBackup(ctx context.Context, task admiral.F
 	if task.Storage == nil || task.Storage.Backend == "" || task.Storage.Backend == "local" {
 		if task.Storage != nil && task.Storage.Key != "" {
 			// Actually delete the local file
-			if err := os.Remove(task.Storage.Key); err != nil && !os.IsNotExist(err) {
+			if err := e.FS.Remove(task.Storage.Key); err != nil && !os.IsNotExist(err) {
 				result.Success = false
 				result.Error = fmt.Sprintf("delete local backup %q: %v", task.Storage.Key, err)
 				return result
 			}
 			// Remove parent directory if empty
 			parentDir := filepath.Dir(task.Storage.Key)
-			_ = os.Remove(parentDir) // ignore error if not empty
+			_ = e.FS.Remove(parentDir) // ignore error if not empty
 		}
 		result.Success = true
 		result.Logs = fmt.Sprintf("backup %s deleted from local storage", task.Storage.BackupID)
@@ -540,11 +548,11 @@ func (e *SystemdPodmanExecutor) writeBackup(instanceID, kind string, data []byte
 		base = "/var/lib/admiral"
 	}
 	dir := filepath.Join(base, "backups", instanceID)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := e.FS.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("create backup dir: %w", err)
 	}
 	path := filepath.Join(dir, fmt.Sprintf("%s-%d.tar.gz", kind, time.Now().UTC().UnixNano()))
-	file, err := os.Create(path)
+	file, err := e.FS.Create(path)
 	if err != nil {
 		return "", fmt.Errorf("create backup file: %w", err)
 	}
@@ -581,7 +589,7 @@ func (e *SystemdPodmanExecutor) collectPostgresBackup(ctx context.Context, task 
 	if !ok || strings.TrimSpace(password) == "" {
 		return nil, fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
 	}
-	return e.podman().Exec(ctx, containerName(task.InstanceID, svc.Name), "env", fmt.Sprintf("PGPASSWORD=%s", password), "pg_dump", "-Fc", "-U", username, databaseName)
+	return e.podman().ExecWithEnv(ctx, containerName(task.InstanceID, svc.Name), map[string]string{"PGPASSWORD": password}, "pg_dump", "-Fc", "-U", username, databaseName)
 }
 
 func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task admiral.FleetTask, svc admiral.ServiceInfo) ([]byte, error) {
@@ -601,7 +609,7 @@ func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task adm
 	if strings.EqualFold(task.Backup.DatabaseType, "mariadb") {
 		dumpCmd = "mariadb-dump"
 	}
-	return e.podman().Exec(ctx, containerName(task.InstanceID, svc.Name), "env", fmt.Sprintf("MYSQL_PWD=%s", password), dumpCmd, "--single-transaction", "--quick", "--routines", "--events", "--triggers", "--skip-lock-tables", "-u", username, databaseName)
+	return e.podman().ExecWithEnv(ctx, containerName(task.InstanceID, svc.Name), map[string]string{"MYSQL_PWD": password}, dumpCmd, "--single-transaction", "--quick", "--routines", "--events", "--triggers", "--skip-lock-tables", "-u", username, databaseName)
 }
 
 func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admiral.FleetTask) ([]byte, error) {
@@ -627,7 +635,7 @@ func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admir
 			return nil, fmt.Errorf("volume %q has no mountpoint", volName)
 		}
 		prefix := svc.Name + "/"
-		err = filepath.Walk(mountpoint, func(path string, info os.FileInfo, err error) error {
+		err = e.FS.Walk(mountpoint, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
@@ -647,7 +655,7 @@ func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admir
 				return err
 			}
 			if info.Mode().IsRegular() {
-				f, err := os.Open(path)
+				f, err := e.FS.Open(path)
 				if err != nil {
 					return err
 				}
@@ -745,7 +753,7 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 	if e.RootlessUser == "" {
 		return nil
 	}
-	u, err := user.Lookup(e.RootlessUser)
+	u, err := e.UserLookup.Lookup(e.RootlessUser)
 	if err != nil {
 		return fmt.Errorf("lookup rootless user %q: %w", e.RootlessUser, err)
 	}
@@ -756,17 +764,17 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 		dataDir = "/var/lib/admiral"
 	}
 	instDir := filepath.Join(dataDir, "instances", instanceID)
-	if err := filepath.Walk(instDir, func(path string, info os.FileInfo, err error) error {
+	if err := e.FS.Walk(instDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		return os.Chown(path, uid, gid)
+		return e.FS.Chown(path, uid, gid)
 	}); err != nil {
 		return err
 	}
 	// Ensure rootless user can traverse to the instance env files
 	for _, dir := range []string{dataDir, filepath.Join(dataDir, "instances")} {
-		if err := os.Chmod(dir, 0751); err != nil && !os.IsNotExist(err) {
+		if err := e.FS.Chmod(dir, 0751); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("chmod %q for rootless traversal: %w", dir, err)
 		}
 	}
@@ -777,13 +785,13 @@ func (e *SystemdPodmanExecutor) chownRestoreDir(dir string) {
 	if e.RootlessUser == "" {
 		return
 	}
-	u, err := user.Lookup(e.RootlessUser)
+	u, err := e.UserLookup.Lookup(e.RootlessUser)
 	if err != nil {
 		return
 	}
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
-	os.Chown(dir, uid, gid)
+	_ = e.FS.Chown(dir, uid, gid)
 }
 
 func (e *SystemdPodmanExecutor) systemd() *systemd.Manager {
@@ -837,9 +845,9 @@ func portsFilePath(dataDir, instanceID string) string {
 	return filepath.Join(dataDir, "instances", instanceID, "ports.json")
 }
 
-func writeInstanceTierInfo(dataDir, instanceID string, tier admiral.TierInfo) {
+func (e *SystemdPodmanExecutor) writeInstanceTierInfo(dataDir, instanceID string, tier admiral.TierInfo) {
 	dir := filepath.Join(dataDir, "instances", instanceID)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := e.FS.MkdirAll(dir, 0700); err != nil {
 		return
 	}
 	info := map[string]interface{}{
@@ -849,20 +857,20 @@ func writeInstanceTierInfo(dataDir, instanceID string, tier admiral.TierInfo) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(filepath.Join(dir, "tier.json"), data, 0600)
+	_ = e.FS.WriteFile(filepath.Join(dir, "tier.json"), data, 0600)
 }
 
 const minHostPort = 40000
 const maxHostPort = 49999
 
-func allocateHostPorts(dataDir, instanceID string, services []admiral.ServiceInfo) (map[string]int, error) {
+func (e *SystemdPodmanExecutor) allocateHostPorts(dataDir, instanceID string, services []admiral.ServiceInfo) (map[string]int, error) {
 	dir := filepath.Join(dataDir, "instances", instanceID)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := e.FS.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create instance dir for port allocation: %w", err)
 	}
 	counterFile := filepath.Join(dataDir, "next_port")
 	next := minHostPort
-	if data, err := os.ReadFile(counterFile); err == nil {
+	if data, err := e.FS.ReadFile(counterFile); err == nil {
 		fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &next)
 	}
 	if next < minHostPort {
@@ -879,21 +887,21 @@ func allocateHostPorts(dataDir, instanceID string, services []admiral.ServiceInf
 		ports[svc.Name] = next
 		next++
 	}
-	if err := os.WriteFile(counterFile, []byte(fmt.Sprintf("%d", next)), 0644); err != nil {
+	if err := e.FS.WriteFile(counterFile, []byte(fmt.Sprintf("%d", next)), 0644); err != nil {
 		return nil, fmt.Errorf("persist next port: %w", err)
 	}
 	portData, err := json.Marshal(ports)
 	if err != nil {
 		return nil, fmt.Errorf("marshal ports: %w", err)
 	}
-	if err := os.WriteFile(portsFilePath(dataDir, instanceID), portData, 0600); err != nil {
+	if err := e.FS.WriteFile(portsFilePath(dataDir, instanceID), portData, 0600); err != nil {
 		return nil, fmt.Errorf("write ports file: %w", err)
 	}
 	return ports, nil
 }
 
-func loadHostPorts(dataDir, instanceID string) map[string]int {
-	data, err := os.ReadFile(portsFilePath(dataDir, instanceID))
+func (e *SystemdPodmanExecutor) loadHostPorts(dataDir, instanceID string) map[string]int {
+	data, err := e.FS.ReadFile(portsFilePath(dataDir, instanceID))
 	if err != nil {
 		return nil
 	}
@@ -919,7 +927,7 @@ func (e *SystemdPodmanExecutor) startRestoreContainers(ctx context.Context, task
 		return nil
 	}
 
-	ports := loadHostPorts(e.DataDir, task.InstanceID)
+	ports := e.loadHostPorts(e.DataDir, task.InstanceID)
 	r := e.renderer()
 	r.HostPorts = ports
 	if err := r.Render(task); err != nil {
@@ -986,7 +994,7 @@ func (e *SystemdPodmanExecutor) fetchRestoreArtifact(ctx context.Context, task a
 	switch strings.ToLower(strings.TrimSpace(task.Restore.StorageBackend)) {
 	case "local", "local_path", "":
 		path := task.Restore.StorageKey
-		if _, err := os.Stat(path); err != nil {
+		if _, err := e.FS.Stat(path); err != nil {
 			return "", fmt.Errorf("local backup artifact %q not accessible: %w", path, err)
 		}
 		return path, nil
@@ -1013,11 +1021,11 @@ func (e *SystemdPodmanExecutor) downloadS3Artifact(ctx context.Context, task adm
 		base = "/var/lib/admiral"
 	}
 	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := e.FS.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("create restore staging dir: %w", err)
 	}
 	path := filepath.Join(dir, "artifact.bin")
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := e.FS.WriteFile(path, data, 0600); err != nil {
 		return "", fmt.Errorf("write S3 artifact: %w", err)
 	}
 	return path, nil
@@ -1050,11 +1058,11 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 		base = "/var/lib/admiral"
 	}
 	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := e.FS.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("create restore staging dir: %w", err)
 	}
 	path := filepath.Join(dir, "artifact.bin")
-	file, err := os.Create(path)
+	file, err := e.FS.Create(path)
 	if err != nil {
 		return "", fmt.Errorf("create restore artifact file: %w", err)
 	}
@@ -1107,7 +1115,7 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 		return fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
 	}
 
-	data, err := os.ReadFile(artifactPath)
+	data, err := e.FS.ReadFile(artifactPath)
 	if err != nil {
 		return fmt.Errorf("read restore artifact: %w", err)
 	}
@@ -1143,7 +1151,7 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 			pingCmd = "mariadb-admin"
 		}
 		for i := 0; i < 15; i++ {
-			out, err := e.podman().Exec(ctx, container, pingCmd, "ping", "-u", username, fmt.Sprintf("-p%s", password), "--silent")
+			out, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"MYSQL_PWD": password}, pingCmd, "ping", "-u", username, "--silent")
 			if err == nil && strings.TrimSpace(string(out)) == "mysqld is alive" {
 				break
 			}
@@ -1159,7 +1167,7 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 	}
 	if dbEngine == "postgresql" {
 		for i := 0; i < 15; i++ {
-			out, err := e.podman().Exec(ctx, container, "pg_isready", "-U", username, "-d", databaseName)
+			out, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"PGPASSWORD": password}, "pg_isready", "-U", username, "-d", databaseName)
 			if err == nil && strings.Contains(string(out), "accepting connections") {
 				break
 			}
@@ -1184,12 +1192,12 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 		if dbEngine == "mariadb" {
 			restoreCmd = "mariadb"
 		}
-		cmd := fmt.Sprintf("MYSQL_PWD='%s' %s -u %s %s < /tmp/admiral-restore.dump", password, restoreCmd, username, databaseName)
-		if _, err := e.podman().Exec(ctx, container, "/bin/sh", "-c", cmd); err != nil {
+		// We still need sh -c to use redirection, but we pass MYSQL_PWD via podman exec -e
+		if _, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"MYSQL_PWD": password}, "/bin/sh", "-c", fmt.Sprintf("%s -u %s %s < /tmp/admiral-restore.dump", restoreCmd, username, databaseName)); err != nil {
 			return fmt.Errorf("run %s restore in container %q: %w", restoreCmd, container, err)
 		}
 	default:
-		if _, err := e.podman().Exec(ctx, container, "env", fmt.Sprintf("PGPASSWORD=%s", password), "pg_restore", "-Fc", "-U", username, "-d", databaseName, "/tmp/admiral-restore.dump"); err != nil {
+		if _, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"PGPASSWORD": password}, "pg_restore", "-Fc", "-U", username, "-d", databaseName, "/tmp/admiral-restore.dump"); err != nil {
 			return fmt.Errorf("run pg_restore in container %q: %w", container, err)
 		}
 	}
@@ -1197,7 +1205,7 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 }
 
 func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral.FleetTask, artifactPath string) error {
-	data, err := os.ReadFile(artifactPath)
+	data, err := e.FS.ReadFile(artifactPath)
 	if err != nil {
 		return fmt.Errorf("read restore artifact: %w", err)
 	}
@@ -1249,15 +1257,15 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(data []byte, mountpo
 			return fmt.Errorf("refuse to restore path outside mountpoint: %s", rel)
 		}
 		if head.FileInfo().IsDir() {
-			if err := os.MkdirAll(targetPath, head.FileInfo().Mode().Perm()); err != nil {
+			if err := e.FS.MkdirAll(targetPath, head.FileInfo().Mode().Perm()); err != nil {
 				return fmt.Errorf("create restore directory %q: %w", targetPath, err)
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		if err := e.FS.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 			return fmt.Errorf("prepare restore path %q: %w", targetPath, err)
 		}
-		out, err := os.Create(targetPath)
+		out, err := e.FS.Create(targetPath)
 		if err != nil {
 			return fmt.Errorf("create restore file %q: %w", targetPath, err)
 		}
@@ -1281,12 +1289,12 @@ func (e *SystemdPodmanExecutor) expandGzipArtifact(path string, data []byte) (st
 		base = "/var/lib/admiral"
 	}
 	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := e.FS.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("create restore staging dir: %w", err)
 	}
 	e.chownRestoreDir(dir)
 	rawPath := filepath.Join(dir, "artifact.raw")
-	rawFile, err := os.Create(rawPath)
+	rawFile, err := e.FS.Create(rawPath)
 	if err != nil {
 		return "", fmt.Errorf("create restore raw artifact: %w", err)
 	}
@@ -1317,15 +1325,15 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDir(data []byte, mountpoint stri
 			return fmt.Errorf("refuse to restore path outside mountpoint: %s", head.Name)
 		}
 		if head.FileInfo().IsDir() {
-			if err := os.MkdirAll(targetPath, head.FileInfo().Mode().Perm()); err != nil {
+			if err := e.FS.MkdirAll(targetPath, head.FileInfo().Mode().Perm()); err != nil {
 				return fmt.Errorf("create restore directory %q: %w", targetPath, err)
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		if err := e.FS.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 			return fmt.Errorf("prepare restore path %q: %w", targetPath, err)
 		}
-		out, err := os.Create(targetPath)
+		out, err := e.FS.Create(targetPath)
 		if err != nil {
 			return fmt.Errorf("create restore file %q: %w", targetPath, err)
 		}
@@ -1339,7 +1347,7 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDir(data []byte, mountpoint stri
 }
 
 func (e *SystemdPodmanExecutor) checksumArtifact(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	data, err := e.FS.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
@@ -1348,6 +1356,6 @@ func (e *SystemdPodmanExecutor) checksumArtifact(path string) (string, error) {
 }
 
 func (e *SystemdPodmanExecutor) cleanupRestoreArtifact(path string) {
-	_ = os.Remove(path)
-	_ = os.RemoveAll(filepath.Dir(path))
+	_ = e.FS.Remove(path)
+	_ = e.FS.RemoveAll(filepath.Dir(path))
 }
