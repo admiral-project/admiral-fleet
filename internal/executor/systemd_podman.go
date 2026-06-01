@@ -211,8 +211,15 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 			return result
 		}
 	}
+	metadata, err := e.startMetadata(ctx, task)
+	if err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
 	result.Success = true
 	result.Logs = fmt.Sprintf("started instance %s", task.InstanceID)
+	result.Metadata = metadata
 	return result
 }
 
@@ -349,6 +356,35 @@ func mustJSONValue(data []byte) interface{} {
 		return string(data)
 	}
 	return v
+}
+
+func (e *SystemdPodmanExecutor) startMetadata(ctx context.Context, task admiral.FleetTask) (string, error) {
+	hostPorts := make(map[string]interface{})
+	infraContainer := containerName(task.InstanceID, "infra")
+	for _, svc := range task.Services {
+		if svc.Port > 0 {
+			var hostPort string
+			for retry := 0; retry < 10; retry++ {
+				p, err := e.podman().PodPort(ctx, infraContainer, fmt.Sprintf("%d/tcp", svc.Port))
+				if err == nil {
+					hostPort = p
+					if hostPort != "" {
+						break
+					}
+				}
+				select {
+				case <-ctx.Done():
+					break
+				case <-time.After(1 * time.Second):
+				}
+			}
+			if hostPort != "" {
+				hostPorts[svc.Name] = hostPort
+			}
+		}
+	}
+	hostPortsJSON, _ := json.Marshal(hostPorts)
+	return fmt.Sprintf(`{"executor":"systemd-podman","action":"start_app","host_ports":%s}`, string(hostPortsJSON)), nil
 }
 
 func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
