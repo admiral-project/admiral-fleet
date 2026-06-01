@@ -21,6 +21,7 @@ type CommandRunner struct{}
 func (r CommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	sanitizedArgs := security.SanitizeArgs(args)
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = "/tmp"
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

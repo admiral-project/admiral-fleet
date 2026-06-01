@@ -148,17 +148,23 @@ func (a *Agent) listAdmiralPods(ctx context.Context) ([]podInfo, error) {
 
 func (a *Agent) podmanCommand(ctx context.Context, args ...string) *exec.Cmd {
 	if a.RootlessUser == "" {
-		return exec.CommandContext(ctx, "podman", args...)
+		cmd := exec.CommandContext(ctx, "podman", args...)
+		cmd.Dir = "/tmp"
+		return cmd
 	}
 
 	// For rootless, run as the rootless user with XDG_RUNTIME_DIR set
 	u, err := user.Lookup(a.RootlessUser)
 	if err != nil {
-		return exec.CommandContext(ctx, "podman", args...)
+		cmd := exec.CommandContext(ctx, "podman", args...)
+		cmd.Dir = "/tmp"
+		return cmd
 	}
 	xdgRuntimeDir := "/run/user/" + u.Uid
 	sudoArgs := append([]string{"-u", a.RootlessUser, "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
-	return exec.CommandContext(ctx, "sudo", sudoArgs...)
+	cmd := exec.CommandContext(ctx, "sudo", sudoArgs...)
+	cmd.Dir = "/tmp"
+	return cmd
 }
 
 func extractInstanceID(podName string) string {
