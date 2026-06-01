@@ -151,11 +151,9 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 	}
 	writeInstanceTierInfo(e.DataDir, task.InstanceID, task.Tier)
 
-	hostPorts := make(map[string]interface{})
+	hostPorts := make(map[string]int)
 	for _, svc := range task.Services {
 		if svc.Port > 0 {
-			// Use the infra container for port lookups — it starts immediately
-			// with the pod and always has the port mapping available.
 			infraContainer := containerName(task.InstanceID, "infra")
 			var hostPort string
 			for retry := 0; retry < 10; retry++ {
@@ -173,7 +171,9 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 				}
 			}
 			if hostPort != "" {
-				hostPorts[svc.Name] = hostPort
+				if p, err := strconv.Atoi(hostPort); err == nil {
+					hostPorts[svc.Name] = p
+				}
 			}
 		}
 	}
@@ -359,7 +359,7 @@ func mustJSONValue(data []byte) interface{} {
 }
 
 func (e *SystemdPodmanExecutor) startMetadata(ctx context.Context, task admiral.FleetTask) (string, error) {
-	hostPorts := make(map[string]interface{})
+	hostPorts := make(map[string]int)
 	infraContainer := containerName(task.InstanceID, "infra")
 	for _, svc := range task.Services {
 		if svc.Port > 0 {
@@ -379,7 +379,9 @@ func (e *SystemdPodmanExecutor) startMetadata(ctx context.Context, task admiral.
 				}
 			}
 			if hostPort != "" {
-				hostPorts[svc.Name] = hostPort
+				if p, err := strconv.Atoi(hostPort); err == nil {
+					hostPorts[svc.Name] = p
+				}
 			}
 		}
 	}
