@@ -3,10 +3,14 @@ package executor
 import (
 	"context"
 	"errors"
+	"os"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/osutil"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/systemd"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
@@ -49,11 +53,36 @@ func (r *fakePodmanRunner) Run(ctx context.Context, name string, args ...string)
 	}
 }
 
+type fakeFS struct {
+	osutil.RealFileSystem
+}
+
+func (f fakeFS) MkdirAll(path string, perm os.FileMode) error { return nil }
+func (f fakeFS) Chmod(name string, mode os.FileMode) error    { return nil }
+func (f fakeFS) Chown(name string, uid, gid int) error       { return nil }
+func (f fakeFS) WriteFile(filename string, data []byte, perm os.FileMode) error { return nil }
+func (f fakeFS) RemoveAll(path string) error                 { return nil }
+func (f fakeFS) ReadFile(name string) ([]byte, error) {
+	if strings.HasSuffix(name, "ports.json") {
+		return []byte("{}"), nil
+	}
+	return nil, os.ErrNotExist
+}
+func (f fakeFS) Walk(root string, walkFn filepath.WalkFunc) error {
+	return nil
+}
+
+type fakeUserLookup struct{}
+
+func (f fakeUserLookup) Lookup(username string) (*user.User, error) {
+	return &user.User{Uid: "1000", Gid: "1000"}, nil
+}
+
 func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 	runner := &fakeSystemdRunner{}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodman(manager, nil, t.TempDir(), t.TempDir(), "nobody")
+	exec := NewSystemdPodmanWithFS(manager, nil, "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
@@ -89,7 +118,7 @@ func TestSystemdPodmanExecutorStartsPodUnitWithLimits(t *testing.T) {
 	runner := &fakeSystemdRunner{}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodman(manager, nil, t.TempDir(), t.TempDir(), "nobody")
+	exec := NewSystemdPodmanWithFS(manager, nil, "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_2",
@@ -117,7 +146,7 @@ func TestSystemdPodmanExecutorStartsPodUnitWithLimits(t *testing.T) {
 	got := runner.calls[1]
 	want := []string{"systemctl", "start", "admiral-demo002-pod.service"}
 	if len(got) != len(want) {
-		t.Fatalf("unexpected call: got %#v want %#v", got, want)
+		t.Fatalf("unexpected call length: got %#v want %#v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -130,7 +159,7 @@ func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 	runner := &fakeSystemdRunner{err: errors.New("unit not found")}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodman(manager, nil, "", "", "nobody")
+	exec := NewSystemdPodmanWithFS(manager, nil, "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
@@ -152,7 +181,7 @@ func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 }
 
 func TestSystemdPodmanExecutorRejectsInvalidProvision(t *testing.T) {
-	exec := NewSystemdPodman(nil, nil, t.TempDir(), t.TempDir(), "nobody")
+	exec := NewSystemdPodmanWithFS(nil, nil, "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		NodeID:     "node_1",
 		Action:     admiral.ActionProvisionApp,
@@ -167,7 +196,7 @@ func TestSystemdPodmanExecutorRejectsInvalidProvision(t *testing.T) {
 func TestSystemdPodmanExecutorInspectAppSnapshot(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodman(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), t.TempDir(), t.TempDir(), "nobody")
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",

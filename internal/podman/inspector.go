@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 )
 
 type Runner interface {
@@ -23,10 +25,12 @@ func (r CommandRunner) Run(ctx context.Context, name string, args ...string) ([]
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		sanitizedArgs := security.SanitizeArgs(args)
 		if stderr.Len() > 0 {
-			return out, fmt.Errorf("%s %v: %w: %s", name, args, err, stderr.String())
+			sanitizedStderr := security.Sanitize(stderr.String())
+			return out, fmt.Errorf("%s %v: %w: %s", name, sanitizedArgs, err, sanitizedStderr)
 		}
-		return out, fmt.Errorf("%s %v: %w", name, args, err)
+		return out, fmt.Errorf("%s %v: %w", name, sanitizedArgs, err)
 	}
 	return out, nil
 }
@@ -87,7 +91,16 @@ func (i *Inspector) VolumeInspect(ctx context.Context, volume string) ([]byte, e
 }
 
 func (i *Inspector) Exec(ctx context.Context, container string, args ...string) ([]byte, error) {
-	cmdArgs := append([]string{"exec", container}, args...)
+	return i.ExecWithEnv(ctx, container, nil, args...)
+}
+
+func (i *Inspector) ExecWithEnv(ctx context.Context, container string, env map[string]string, args ...string) ([]byte, error) {
+	cmdArgs := []string{"exec"}
+	for k, v := range env {
+		cmdArgs = append(cmdArgs, "-e", fmt.Sprintf("%s=%s", k, v))
+	}
+	cmdArgs = append(cmdArgs, container)
+	cmdArgs = append(cmdArgs, args...)
 	return i.run(ctx, cmdArgs...)
 }
 
@@ -137,6 +150,9 @@ func (i *Inspector) runAsUser(ctx context.Context, args ...string) ([]byte, erro
 	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
 	// Use sudo to run podman as the rootless user, with XDG_RUNTIME_DIR set
 	// so podman can find the user's runtime directory (rootless containers).
+
+	// We MUST NOT sanitize here, because this is the WRAPPER.
+	// The ACTUAL runner (CommandRunner) will sanitize the final arguments.
 	sudoArgs := append([]string{"-u", i.RootlessUser, "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
 
 	runner := i.Runner

@@ -8,6 +8,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"time"
+
+	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 )
 
 type Runner interface {
@@ -17,15 +19,17 @@ type Runner interface {
 type CommandRunner struct{}
 
 func (r CommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	sanitizedArgs := security.SanitizeArgs(args)
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
 		if stderr.Len() > 0 {
-			return out, fmt.Errorf("%s %v: %w: %s", name, args, err, stderr.String())
+			sanitizedStderr := security.Sanitize(stderr.String())
+			return out, fmt.Errorf("%s %v: %w: %s", name, sanitizedArgs, err, sanitizedStderr)
 		}
-		return out, fmt.Errorf("%s %v: %w", name, args, err)
+		return out, fmt.Errorf("%s %v: %w", name, sanitizedArgs, err)
 	}
 	return out, nil
 }
@@ -90,21 +94,22 @@ func (m *Manager) run(ctx context.Context, args ...string) ([]byte, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	runner := m.Runner
+	if runner == nil {
+		runner = CommandRunner{}
+	}
+
 	if m.RunAsUser != "" {
-		return m.runAsUser(runCtx, args...)
+		return m.runAsUser(runCtx, runner, args...)
 	}
 
 	name := "systemctl"
 	cmdArgs := args
 
-	runner := m.Runner
-	if runner == nil {
-		runner = CommandRunner{}
-	}
 	return runner.Run(runCtx, name, cmdArgs...)
 }
 
-func (m *Manager) runAsUser(ctx context.Context, args ...string) ([]byte, error) {
+func (m *Manager) runAsUser(ctx context.Context, runner Runner, args ...string) ([]byte, error) {
 	u, err := user.Lookup(m.RunAsUser)
 	if err != nil {
 		return nil, fmt.Errorf("lookup rootless user %q: %w", m.RunAsUser, err)
@@ -112,9 +117,5 @@ func (m *Manager) runAsUser(ctx context.Context, args ...string) ([]byte, error)
 	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
 	sudoArgs := append([]string{"-u", m.RunAsUser, "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "systemctl", "--user"}, args...)
 
-	runner := m.Runner
-	if runner == nil {
-		runner = CommandRunner{}
-	}
 	return runner.Run(ctx, "sudo", sudoArgs...)
 }
