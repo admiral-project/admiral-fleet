@@ -20,7 +20,7 @@ import (
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
-const FleetVersion = "0.0.1alpha4"
+const FleetVersion = "0.0.1alpha5"
 
 func (a *Agent) StartHeartbeatSender(ctx context.Context) {
 	time.Sleep(10 * time.Second)
