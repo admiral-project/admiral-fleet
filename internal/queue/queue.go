@@ -7,18 +7,21 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq" // register PostgreSQL driver
 )
 
 const (
 	defaultPollInterval  = 2 * time.Second
 	defaultLeaseDuration = 5 * time.Minute
 )
+
+var errNoCommandAvailable = errors.New("no command available")
 
 type Consumer struct {
 	db            *sql.DB
@@ -59,11 +62,11 @@ func (c *Consumer) ConsumeLoop(handler func(admiral.FleetTask) error) {
 	for {
 		cmd, err := c.claimNext(context.Background())
 		if err != nil {
+			if errors.Is(err, errNoCommandAvailable) {
+				time.Sleep(c.pollInterval)
+				continue
+			}
 			slog.Error("queue claim failed", "error", err)
-			time.Sleep(c.pollInterval)
-			continue
-		}
-		if cmd == nil {
 			time.Sleep(c.pollInterval)
 			continue
 		}
@@ -171,7 +174,7 @@ func (c *Consumer) claimNext(ctx context.Context) (*claimedCommand, error) {
 			if err := tx.Commit(); err != nil {
 				return nil, fmt.Errorf("commit empty claim tx: %w", err)
 			}
-			return nil, nil
+			return nil, errNoCommandAvailable
 		}
 		return nil, fmt.Errorf("scan claimed command: %w", err)
 	}

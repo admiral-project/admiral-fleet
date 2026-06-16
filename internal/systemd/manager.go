@@ -25,7 +25,7 @@ func (r CommandRunner) Run(ctx context.Context, name string, args ...string) ([]
 		return nil, err
 	}
 	sanitizedArgs := security.SanitizeArgs(args)
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- name and args are validated by security.ValidateExecParams
 	cmd.Dir = "/tmp"
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

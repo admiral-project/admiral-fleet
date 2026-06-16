@@ -40,7 +40,7 @@ func (r CommandRunner) runWithStdin(ctx context.Context, stdin io.Reader, name s
 		return nil, err
 	}
 	sanitizedArgs := security.SanitizeArgs(args)
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- name and args are validated by security.ValidateExecParams
 	cmd.Dir = "/tmp"
 	cmd.Stdin = stdin
 	var stderr bytes.Buffer
@@ -204,10 +204,6 @@ func (i *Inspector) runWithStdin(ctx context.Context, stdin io.Reader, args ...s
 		return nil, fmt.Errorf("runner %T does not support stdin", runner)
 	}
 	return runner.Run(runCtx, "podman", args...)
-}
-
-func (i *Inspector) runAsUser(ctx context.Context, args ...string) ([]byte, error) {
-	return i.runAsUserWithStdin(ctx, nil, args...)
 }
 
 func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {

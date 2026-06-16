@@ -149,8 +149,9 @@ func (a *Agent) listAdmiralPods(ctx context.Context) ([]podInfo, error) {
 		return nil, fmt.Errorf("list pods: %w", err)
 	}
 
-	var pods []podInfo
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	pods := make([]podInfo, 0, len(lines))
+	for _, line := range lines {
 		if line == "" {
 			continue
 		}
@@ -174,20 +175,20 @@ func (a *Agent) podmanCommand(ctx context.Context, args ...string) *exec.Cmd {
 	}
 
 	if a.RootlessUser == "" {
-		cmd := exec.CommandContext(ctx, "podman", args...)
+		cmd := exec.CommandContext(ctx, "podman", args...) // #nosec G204 -- args are validated by security.ValidateRunArgs
 		cmd.Dir = "/tmp"
 		return cmd
 	}
 
 	u, err := user.Lookup(a.RootlessUser)
 	if err != nil {
-		cmd := exec.CommandContext(ctx, "podman", args...)
+		cmd := exec.CommandContext(ctx, "podman", args...) // #nosec G204 -- args are validated by security.ValidateRunArgs
 		cmd.Dir = "/tmp"
 		return cmd
 	}
 	xdgRuntimeDir := "/run/user/" + u.Uid
 	runuserArgs := append([]string{"-u", a.RootlessUser, "--", "env", "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
-	cmd := exec.CommandContext(ctx, "runuser", runuserArgs...)
+	cmd := exec.CommandContext(ctx, "runuser", runuserArgs...) // #nosec G204 -- wrapper args are validated and preserve rootless podman execution semantics
 	cmd.Dir = "/tmp"
 	return cmd
 }
@@ -227,13 +228,6 @@ func (a *Agent) StartStorageChecker(ctx context.Context) {
 			a.checkInstanceStorage(ctx)
 		}
 	}
-}
-
-type instanceVolInfo struct {
-	InstanceID   string
-	VolumeName   string
-	Mountpoint   string
-	StorageLimit int64
 }
 
 func (a *Agent) checkInstanceStorage(ctx context.Context) {
@@ -323,7 +317,7 @@ func readInstanceStorageLimit(instanceID string) string {
 		filepath.Join("/var/lib/admiral/instances", safeID, "instance.json"),
 	}
 	for _, p := range paths {
-		data, err := os.ReadFile(p)
+		data, err := os.ReadFile(p) // #nosec G304 -- paths are built from controlled instance metadata locations
 		if err != nil {
 			continue
 		}
@@ -411,7 +405,7 @@ func (a *Agent) findVolumeMountpoint(ctx context.Context, instanceID string) str
 }
 
 func measureDirUsage(ctx context.Context, dir string) int64 {
-	cmd := exec.CommandContext(ctx, "du", "-sb", dir)
+	cmd := exec.CommandContext(ctx, "du", "-sb", dir) // #nosec G204 -- dir comes from podman volume inspection for an existing mountpoint
 	out, err := cmd.Output()
 	if err != nil {
 		return -1
@@ -446,7 +440,7 @@ func (a *Agent) postHealth(report healthReport) error {
 		return fmt.Errorf("encode health report: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.APIURL+"/api/v1/fleet/health", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, a.APIURL+"/api/v1/fleet/health", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create health request: %w", err)
 	}

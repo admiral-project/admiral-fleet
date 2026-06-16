@@ -31,9 +31,9 @@ func (RealFileSystem) Chown(name string, uid, gid int) error        { return os.
 func (RealFileSystem) RemoveAll(path string) error                  { return os.RemoveAll(path) }
 func (RealFileSystem) Remove(name string) error                     { return os.Remove(name) }
 func (RealFileSystem) Stat(name string) (os.FileInfo, error)        { return os.Stat(name) }
-func (RealFileSystem) Create(name string) (*os.File, error)         { return os.Create(name) }
-func (RealFileSystem) Open(name string) (*os.File, error)           { return os.Open(name) }
-func (RealFileSystem) ReadFile(name string) ([]byte, error)         { return os.ReadFile(name) }
+func (RealFileSystem) Create(name string) (*os.File, error)         { return os.Create(name) }   // #nosec G304 -- generic filesystem adapter delegates path validation to callers
+func (RealFileSystem) Open(name string) (*os.File, error)           { return os.Open(name) }     // #nosec G304 -- generic filesystem adapter delegates path validation to callers
+func (RealFileSystem) ReadFile(name string) ([]byte, error)         { return os.ReadFile(name) } // #nosec G304 -- generic filesystem adapter delegates path validation to callers
 func (RealFileSystem) WriteFile(filename string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(filename, data, perm)
 }

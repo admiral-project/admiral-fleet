@@ -11,7 +11,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"sort"
@@ -60,7 +59,7 @@ func (c *S3Client) PutObject(ctx context.Context, key string, data []byte) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("s3 put %q: http %d: %s", key, resp.StatusCode, string(body))
 	}
 	return nil
@@ -78,10 +77,10 @@ func (c *S3Client) GetObject(ctx context.Context, key string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("s3 get %q: http %d: %s", key, resp.StatusCode, string(body))
 	}
-	return ioutil.ReadAll(resp.Body)
+	return io.ReadAll(resp.Body)
 }
 
 func (c *S3Client) DeleteObject(ctx context.Context, key string) error {
@@ -96,7 +95,7 @@ func (c *S3Client) DeleteObject(ctx context.Context, key string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("s3 delete %q: http %d: %s", key, resp.StatusCode, string(body))
 	}
 	return nil
@@ -198,7 +197,7 @@ func NewS3FromConfig(cfg *admiral.StorageConfig) (*S3Client, error) {
 	return NewS3Client(cfg.Endpoint, cfg.Region, cfg.Bucket, cfg.Prefix, accessKey, secretKey, cfg.ForcePathStyle), nil
 }
 
-func (c *S3Client) canonicalURI(req *http.Request, key string) string {
+func (c *S3Client) canonicalURI(_ *http.Request, key string) string {
 	isPathStyle := c.usePathStyle || !strings.Contains(c.endpoint, ".amazonaws.com")
 	if isPathStyle {
 		if key == "" {

@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -29,6 +30,11 @@ import (
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
+const (
+	maxRestoreArtifactBytes = 1 << 30
+	maxRestoreFileBytes     = 256 << 20
+)
+
 type SystemdPodmanExecutor struct {
 	Systemd      *systemd.Manager
 	Podman       *podman.Inspector
@@ -41,6 +47,33 @@ type SystemdPodmanExecutor struct {
 
 func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir, rootlessUser string) *SystemdPodmanExecutor {
 	return NewSystemdPodmanWithFS(systemdManager, podmanInspector, quadletDir, dataDir, rootlessUser, osutil.RealFileSystem{}, osutil.RealUserLookup{})
+}
+
+func closeAndRemove(fs osutil.FileSystem, path string, closers ...io.Closer) error {
+	var cleanupErrs []error
+	for _, closer := range closers {
+		if closer == nil {
+			continue
+		}
+		if err := closer.Close(); err != nil {
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	if err := fs.Remove(path); err != nil && !os.IsNotExist(err) {
+		cleanupErrs = append(cleanupErrs, err)
+	}
+	return errors.Join(cleanupErrs...)
+}
+
+func copyWithLimit(dst io.Writer, src io.Reader, limit int64, label string) error {
+	written, err := io.Copy(dst, io.LimitReader(src, limit+1))
+	if err != nil {
+		return err
+	}
+	if written > limit {
+		return fmt.Errorf("%s exceeds maximum size of %d bytes", label, limit)
+	}
+	return nil
 }
 
 func parsePublishedPort(raw string) (int, error) {
@@ -538,22 +571,19 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 	h := sha256.New()
 	gw := gzip.NewWriter(io.MultiWriter(f, h))
 	if _, err := gw.Write(data); err != nil {
-		gw.Close()
-		f.Close()
-		e.FS.Remove(path)
+		_ = closeAndRemove(e.FS, path, gw, f)
 		result.Success = false
 		result.Error = fmt.Sprintf("gzip data: %v", err)
 		return result
 	}
 	if err := gw.Close(); err != nil {
-		f.Close()
-		e.FS.Remove(path)
+		_ = closeAndRemove(e.FS, path, f)
 		result.Success = false
 		result.Error = fmt.Sprintf("close gzip: %v", err)
 		return result
 	}
 	if err := f.Close(); err != nil {
-		e.FS.Remove(path)
+		_ = closeAndRemove(e.FS, path)
 		result.Success = false
 		result.Error = fmt.Sprintf("close backup file: %v", err)
 		return result
@@ -610,23 +640,20 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 	gw := gzip.NewWriter(io.MultiWriter(f, h))
 
 	if err := e.collectVolumeTar(ctx, task, gw); err != nil {
-		gw.Close()
-		f.Close()
-		e.FS.Remove(path)
+		_ = closeAndRemove(e.FS, path, gw, f)
 		result.Success = false
 		result.Error = err.Error()
 		return result
 	}
 
 	if err := gw.Close(); err != nil {
-		f.Close()
-		e.FS.Remove(path)
+		_ = closeAndRemove(e.FS, path, f)
 		result.Success = false
 		result.Error = fmt.Sprintf("close gzip: %v", err)
 		return result
 	}
 	if err := f.Close(); err != nil {
-		e.FS.Remove(path)
+		_ = closeAndRemove(e.FS, path)
 		result.Success = false
 		result.Error = fmt.Sprintf("close backup file: %v", err)
 		return result
@@ -997,7 +1024,7 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 		dataDir = "/var/lib/admiral"
 	}
 	instDir := filepath.Join(dataDir, "instances", instanceID)
-	if err := e.FS.Walk(instDir, func(path string, info os.FileInfo, err error) error {
+	if err := e.FS.Walk(instDir, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -1127,7 +1154,9 @@ func (e *SystemdPodmanExecutor) allocateHostPorts(dataDir, instanceID string, se
 	counterFile := filepath.Join(dataDir, "next_port")
 	next := minHostPort
 	if data, err := e.FS.ReadFile(counterFile); err == nil {
-		fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &next)
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &next); err != nil {
+			next = minHostPort
+		}
 	}
 	if next < minHostPort {
 		next = minHostPort
@@ -1530,7 +1559,7 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 		return fmt.Errorf("copy restore artifact into container %q: %w", container, err)
 	}
 
-	dumpData, err := os.ReadFile(rawPath)
+	dumpData, err := e.FS.ReadFile(rawPath) // #nosec G304 -- rawPath is generated in a controlled restore staging directory
 	if err != nil {
 		return fmt.Errorf("read decompressed dump for restore: %w", err)
 	}
@@ -1601,7 +1630,7 @@ func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral
 }
 
 func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(data []byte, mountpoint, prefix string) error {
-	reader, err := gzip.NewReader(strings.NewReader(string(data)))
+	reader, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("open restore volume archive: %w", err)
 	}
@@ -1609,7 +1638,7 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(data []byte, mountpo
 	tarReader := tar.NewReader(reader)
 	for {
 		head, err := tarReader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -1636,17 +1665,19 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(data []byte, mountpo
 		if err != nil {
 			return fmt.Errorf("create restore file %q: %w", targetPath, err)
 		}
-		if _, err := io.Copy(out, tarReader); err != nil {
-			out.Close()
+		if err := copyWithLimit(out, tarReader, maxRestoreFileBytes, "restore file"); err != nil {
+			_ = out.Close()
 			return fmt.Errorf("write restore file %q: %w", targetPath, err)
 		}
-		_ = out.Close()
+		if err := out.Close(); err != nil {
+			return fmt.Errorf("close restore file %q: %w", targetPath, err)
+		}
 	}
 	return nil
 }
 
 func (e *SystemdPodmanExecutor) expandGzipArtifact(path string, data []byte) (string, error) {
-	reader, err := gzip.NewReader(strings.NewReader(string(data)))
+	reader, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return "", fmt.Errorf("open restore archive %q: %w", path, err)
 	}
@@ -1666,51 +1697,10 @@ func (e *SystemdPodmanExecutor) expandGzipArtifact(path string, data []byte) (st
 		return "", fmt.Errorf("create restore raw artifact: %w", err)
 	}
 	defer rawFile.Close()
-	if _, err := io.Copy(rawFile, reader); err != nil {
+	if err := copyWithLimit(rawFile, reader, maxRestoreArtifactBytes, "restore artifact"); err != nil {
 		return "", fmt.Errorf("decompress restore artifact: %w", err)
 	}
 	return rawPath, nil
-}
-
-func (e *SystemdPodmanExecutor) extractGzipTarToDir(data []byte, mountpoint string) error {
-	reader, err := gzip.NewReader(strings.NewReader(string(data)))
-	if err != nil {
-		return fmt.Errorf("open restore volume archive: %w", err)
-	}
-	defer reader.Close()
-	tarReader := tar.NewReader(reader)
-	for {
-		head, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read restore volume archive: %w", err)
-		}
-		targetPath := filepath.Join(mountpoint, filepath.Clean(head.Name))
-		if !strings.HasPrefix(targetPath, filepath.Clean(mountpoint)+string(os.PathSeparator)) && filepath.Clean(targetPath) != filepath.Clean(mountpoint) {
-			return fmt.Errorf("refuse to restore path outside mountpoint: %s", head.Name)
-		}
-		if head.FileInfo().IsDir() {
-			if err := e.FS.MkdirAll(targetPath, head.FileInfo().Mode().Perm()); err != nil {
-				return fmt.Errorf("create restore directory %q: %w", targetPath, err)
-			}
-			continue
-		}
-		if err := e.FS.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-			return fmt.Errorf("prepare restore path %q: %w", targetPath, err)
-		}
-		out, err := e.FS.Create(targetPath)
-		if err != nil {
-			return fmt.Errorf("create restore file %q: %w", targetPath, err)
-		}
-		if _, err := io.Copy(out, tarReader); err != nil {
-			out.Close()
-			return fmt.Errorf("write restore file %q: %w", targetPath, err)
-		}
-		_ = out.Close()
-	}
-	return nil
 }
 
 func (e *SystemdPodmanExecutor) checksumArtifact(path string) (string, error) {
@@ -1737,7 +1727,7 @@ func (e *SystemdPodmanExecutor) verifyRestoreChecksum(path, expected string) (bo
 	}
 	payload, err := gunzipBytes(data)
 	if err != nil {
-		return false, actual, nil
+		return false, actual, err
 	}
 	sum := sha256.Sum256(payload)
 	payloadSum := fmt.Sprintf("sha256:%x", sum[:])

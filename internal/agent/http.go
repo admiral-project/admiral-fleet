@@ -23,7 +23,7 @@ type EndpointInfo struct {
 
 func StartHTTPServer(addr, nodeID, executor, targetHost, targetPort string) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, EndpointInfo{
 			NodeID:     nodeID,
 			TargetHost: targetHost,
@@ -33,7 +33,7 @@ func StartHTTPServer(addr, nodeID, executor, targetHost, targetPort string) {
 			CheckedAt:  time.Now().UTC().Format(time.RFC3339),
 		})
 	})
-	mux.HandleFunc("/endpoint", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/endpoint", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, EndpointInfo{
 			NodeID:     nodeID,
 			TargetHost: targetHost,
@@ -59,9 +59,15 @@ func StartHTTPServer(addr, nodeID, executor, targetHost, targetPort string) {
 		return
 	}
 	localAddr := net.JoinHostPort("127.0.0.1", port)
+	server := &http.Server{
+		Addr:              localAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
 	go func() {
 		slog.Info("starting internal HTTP server", "addr", localAddr)
-		if err := http.ListenAndServe(localAddr, mux); err != nil {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Warn("internal HTTP server stopped", "error", err)
 		}
 	}()

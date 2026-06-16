@@ -77,7 +77,7 @@ func (a *Agent) postHeartbeat(req admiral.HeartbeatRequest) error {
 		return fmt.Errorf("encode heartbeat: %w", err)
 	}
 
-	httpReq, err := http.NewRequest(http.MethodPost, a.APIURL+"/api/v1/nodes/heartbeat", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, a.APIURL+"/api/v1/nodes/heartbeat", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create heartbeat request: %w", err)
 	}
@@ -150,7 +150,7 @@ func detectDiskUsage(ctx context.Context) (totalBytes, usedBytes int64) {
 	return total, used
 }
 
-func detectRAMUsage(ctx context.Context) (totalBytes, usedBytes, availBytes int64) {
+func detectRAMUsage(_ context.Context) (totalBytes, usedBytes, availBytes int64) {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return 0, 0, 0

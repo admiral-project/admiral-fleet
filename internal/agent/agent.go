@@ -91,7 +91,7 @@ func (a *Agent) postStorage(report admiral.StorageReport) error {
 		return fmt.Errorf("encode storage report: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.APIURL+"/api/v1/fleet/storage", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, a.APIURL+"/api/v1/fleet/storage", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create storage request: %w", err)
 	}
@@ -130,7 +130,7 @@ func (a *Agent) send(result admiral.TaskResult) error {
 		return fmt.Errorf("encode task result: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.APIURL+"/api/v1/fleet/callback", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, a.APIURL+"/api/v1/fleet/callback", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create callback request: %w", err)
 	}

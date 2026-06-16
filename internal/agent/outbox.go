@@ -62,7 +62,7 @@ func (o *outbox) flush(send func(admiral.TaskResult) error) error {
 	}
 	sort.Strings(files)
 	for _, path := range files {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) // #nosec G304 -- path comes from enumerating the controlled outbox directory
 		if err != nil {
 			continue
 		}

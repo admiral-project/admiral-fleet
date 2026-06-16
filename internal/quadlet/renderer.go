@@ -41,7 +41,7 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 	if err := os.MkdirAll(filepath.Join(instanceDir, "data"), 0750); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
-	if err := os.MkdirAll(r.QuadletDir, 0755); err != nil {
+	if err := os.MkdirAll(r.QuadletDir, 0750); err != nil {
 		return fmt.Errorf("create quadlet dir: %w", err)
 	}
 
@@ -94,10 +94,6 @@ func SortedServices(services []admiral.ServiceInfo) []admiral.ServiceInfo {
 		return out[i].Name < out[j].Name
 	})
 	return out
-}
-
-func shouldUsePod(_ admiral.FleetTask) bool {
-	return true
 }
 
 func PodFileName(instanceID string) string {
