@@ -62,6 +62,9 @@ func (m *Manager) DaemonReload(ctx context.Context) error {
 }
 
 func (m *Manager) Start(ctx context.Context, unit string) error {
+	if m.RunAsUser != "" {
+		return m.startRootless(ctx, unit)
+	}
 	_, err := m.run(ctx, "start", unit)
 	return err
 }
@@ -93,6 +96,24 @@ func (m *Manager) ResetFailed(ctx context.Context) error {
 
 func (m *Manager) Status(ctx context.Context, unit string) ([]byte, error) {
 	return m.run(ctx, "status", "--no-pager", unit)
+}
+
+func (m *Manager) startRootless(ctx context.Context, unit string) error {
+	_, err := m.run(ctx, "start", unit)
+	if err == nil {
+		return nil
+	}
+	if !isMissingRootlessUnitError(err) {
+		return err
+	}
+	if err := m.DaemonReload(ctx); err != nil {
+		return fmt.Errorf("reload rootless manager before starting %q: %w", unit, err)
+	}
+	_, err = m.run(ctx, "start", unit)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -157,13 +178,13 @@ func (m *Manager) rootlessDaemonReload(ctx context.Context) error {
 		return err
 	}
 	var lastErr error
-	for attempt := 0; attempt < 6; attempt++ {
+	for attempt := 0; attempt < 2; attempt++ {
 		_, err := m.runAsUserCommand(ctx, runner, "daemon-reload")
 		if err == nil {
 			return nil
 		}
 		lastErr = err
-		if !isTransientRootlessReloadError(err) || attempt == 5 {
+		if !isTransientRootlessReloadError(err) || attempt == 1 {
 			return err
 		}
 		select {
@@ -179,4 +200,12 @@ func isTransientRootlessReloadError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "Connection reset by peer") ||
 		strings.Contains(msg, "Transport endpoint is not connected")
+}
+
+func isMissingRootlessUnitError(err error) bool {
+	msg := strings.ToUpper(err.Error())
+	return strings.Contains(msg, "NOTINSTALLED") ||
+		strings.Contains(msg, "NOT FOUND") ||
+		strings.Contains(msg, "UNIT ") && strings.Contains(msg, " NOT FOUND") ||
+		strings.Contains(msg, "UNIT ") && strings.Contains(msg, " NOT AVAILABLE")
 }
