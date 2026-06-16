@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: admiral-project/admirald
+          path: admirald
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          check-latest: true
+
+      - run: go mod edit -replace github.com/admiral-project/admiral/admirald=./admirald
+        name: Fix replace for CI
+
+      - run: go fmt ./... 2>&1 | tee /tmp/gofmt; test $(wc -l < /tmp/gofmt) -eq 0
+        name: Check gofmt
+
+      - run: go vet ./...
+        name: go vet
+
+      - run: go build ./...
+        name: go build
+
+      - run: |
+          sudo systemctl start postgresql
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+          sudo -u postgres createdb admiral_queue
+        name: Start PostgreSQL
+
+      - run: go test ./... -count=1
+        name: go test
