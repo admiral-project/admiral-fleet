@@ -119,15 +119,46 @@ func (m *Manager) run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (m *Manager) runAsUser(ctx context.Context, runner Runner, args ...string) ([]byte, error) {
+	if err := m.ensureLingerEnabled(ctx, runner); err != nil {
+		return nil, err
+	}
+	return m.runAsUserCommand(ctx, runner, args...)
+}
+
+func (m *Manager) runAsUserCommand(ctx context.Context, runner Runner, args ...string) ([]byte, error) {
 	systemctlArgs := append([]string{"systemctl", "--machine=" + m.RunAsUser + "@", "--user"}, args...)
 	cmdArgs := append([]string{"--wait", "--collect", "--working-directory=/tmp"}, systemctlArgs...)
 	return runner.Run(ctx, "systemd-run", cmdArgs...)
 }
 
+func (m *Manager) ensureLingerEnabled(ctx context.Context, runner Runner) error {
+	if strings.TrimSpace(m.RunAsUser) == "" {
+		return nil
+	}
+	timeout := m.Timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	lingerCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	_, err := runner.Run(lingerCtx, "loginctl", "enable-linger", m.RunAsUser)
+	if err != nil {
+		return fmt.Errorf("enable lingering for %q: %w", m.RunAsUser, err)
+	}
+	return nil
+}
+
 func (m *Manager) rootlessDaemonReload(ctx context.Context) error {
+	runner := m.Runner
+	if runner == nil {
+		runner = CommandRunner{}
+	}
+	if err := m.ensureLingerEnabled(ctx, runner); err != nil {
+		return err
+	}
 	var lastErr error
 	for attempt := 0; attempt < 6; attempt++ {
-		_, err := m.run(ctx, "daemon-reload")
+		_, err := m.runAsUserCommand(ctx, runner, "daemon-reload")
 		if err == nil {
 			return nil
 		}

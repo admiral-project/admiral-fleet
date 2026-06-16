@@ -63,8 +63,29 @@ func TestManagerUsesSystemdRunForRootlessUserManager(t *testing.T) {
 	}
 
 	expected := []call{
+		{name: "loginctl", args: []string{"enable-linger", "admiral-apps"}},
 		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=admiral-apps@", "--user", "daemon-reload"}},
+		{name: "loginctl", args: []string{"enable-linger", "admiral-apps"}},
 		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=admiral-apps@", "--user", "start", "admiral-demo-app.service"}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestManagerRootlessDaemonReloadEnablesLingerOnce(t *testing.T) {
+	runner := &fakeRunner{}
+	manager := NewManager(runner)
+	manager.Timeout = time.Second
+	manager.RunAsUser = "admiral-apps"
+
+	if err := manager.DaemonReload(context.Background()); err != nil {
+		t.Fatalf("daemon-reload: %v", err)
+	}
+
+	expected := []call{
+		{name: "loginctl", args: []string{"enable-linger", "admiral-apps"}},
+		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=admiral-apps@", "--user", "daemon-reload"}},
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
