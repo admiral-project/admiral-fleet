@@ -26,7 +26,7 @@ jobs:
       - run: go mod edit -replace github.com/admiral-project/admiral/admirald=./admirald
         name: Fix replace for CI
 
-      - run: go fmt ./... 2>&1 | tee /tmp/gofmt; test $(wc -l < /tmp/gofmt) -eq 0
+      - run: test -z "$(go fmt ./...)"
         name: Check gofmt
 
       - run: go vet ./...
