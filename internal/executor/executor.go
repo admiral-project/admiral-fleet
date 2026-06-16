@@ -20,7 +20,7 @@ func NewSimulated() *SimulatedExecutor {
 	return &SimulatedExecutor{}
 }
 
-func (e *SimulatedExecutor) Execute(ctx context.Context, task admiral.FleetTask, nodeID string) admiral.TaskResult {
+func (e *SimulatedExecutor) Execute(_ context.Context, task admiral.FleetTask, nodeID string) admiral.TaskResult {
 	result := admiral.TaskResult{
 		TaskID:      task.TaskID,
 		OperationID: task.OperationID,

@@ -18,7 +18,7 @@ type errorRunner struct {
 	err error
 }
 
-func (r *errorRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+func (r *errorRunner) Run(_ context.Context, _ string, _ ...string) ([]byte, error) {
 	return nil, r.err
 }
 

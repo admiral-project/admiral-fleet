@@ -27,7 +27,7 @@ type fakeSystemdRunner struct {
 	err   error
 }
 
-func (r *fakeSystemdRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+func (r *fakeSystemdRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := append([]string{name}, args...)
 	r.calls = append(r.calls, call)
 	if r.err != nil {
@@ -48,7 +48,7 @@ type fakePodmanRunner struct {
 	overrides map[string]fakeOverride
 }
 
-func (r *fakePodmanRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+func (r *fakePodmanRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := append([]string{name}, args...)
 	r.calls = append(r.calls, call)
 	joined := strings.Join(call, " ")
@@ -92,14 +92,13 @@ func (r *fakePodmanRunner) Run(ctx context.Context, name string, args ...string)
 
 type fakeFS struct {
 	osutil.RealFileSystem
-	root string
 }
 
 func (f fakeFS) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
-func (f fakeFS) Chmod(name string, mode os.FileMode) error { return nil }
-func (f fakeFS) Chown(name string, uid, gid int) error     { return nil }
+func (f fakeFS) Chmod(_ string, _ os.FileMode) error { return nil }
+func (f fakeFS) Chown(_ string, _, _ int) error      { return nil }
 func (f fakeFS) WriteFile(filename string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
 		return err
@@ -130,7 +129,7 @@ func (f fakeFS) Walk(root string, walkFn filepath.WalkFunc) error {
 
 type fakeUserLookup struct{}
 
-func (f fakeUserLookup) Lookup(username string) (*user.User, error) {
+func (f fakeUserLookup) Lookup(_ string) (*user.User, error) {
 	return &user.User{Uid: "1000", Gid: "1000"}, nil
 }
 

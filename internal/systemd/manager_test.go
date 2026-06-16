@@ -19,7 +19,7 @@ type fakeRunner struct {
 	calls []call
 }
 
-func (r *fakeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, call{name: name, args: append([]string(nil), args...)})
 	return []byte("ok"), nil
 }
