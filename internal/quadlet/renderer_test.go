@@ -123,6 +123,33 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	}
 }
 
+func TestRendererMakesQuadletDirTraversableForRootlessUser(t *testing.T) {
+	parent := t.TempDir()
+	quadletDir := filepath.Join(parent, "admiral")
+	dataDir := t.TempDir()
+	renderer := NewRenderer(quadletDir, dataDir)
+
+	task := admiral.FleetTask{
+		InstanceID: "demo002",
+		Tier:       admiral.TierInfo{CPU: 1},
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "docker.io/traefik/whoami:v1.10"},
+		},
+	}
+
+	if err := renderer.Render(task); err != nil {
+		t.Fatalf("render quadlet: %v", err)
+	}
+
+	info, err := os.Stat(quadletDir)
+	if err != nil {
+		t.Fatalf("stat quadlet dir: %v", err)
+	}
+	if info.Mode().Perm() != 0755 {
+		t.Fatalf("expected quadlet dir mode 0755, got %o", info.Mode().Perm())
+	}
+}
+
 func TestRendererSingleServiceWithTierLimitsCreatesPod(t *testing.T) {
 	quadletDir := t.TempDir()
 	dataDir := t.TempDir()

@@ -44,6 +44,9 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 	if err := os.MkdirAll(r.QuadletDir, 0750); err != nil {
 		return fmt.Errorf("create quadlet dir: %w", err)
 	}
+	if err := os.Chmod(r.QuadletDir, 0755); err != nil {
+		return fmt.Errorf("set quadlet dir mode: %w", err)
+	}
 
 	if err := writeFile(filepath.Join(r.QuadletDir, PodFileName(task.InstanceID)), r.renderPod(task), 0644); err != nil {
 		return err
