@@ -340,32 +340,65 @@ func parseStorageLimitBytes(value string) int64 {
 
 	lower := strings.ToLower(value)
 	multiplier := int64(1)
+	unitLen := 0
 
 	switch {
-	case strings.HasSuffix(lower, "tib"), strings.HasSuffix(lower, "ti"), strings.HasSuffix(lower, "tb"):
+	case strings.HasSuffix(lower, "tib"):
 		multiplier = 1024 * 1024 * 1024 * 1024
-		value = value[:len(value)-2]
+		unitLen = 3
+	case strings.HasSuffix(lower, "ti"):
+		multiplier = 1024 * 1024 * 1024 * 1024
+		unitLen = 2
+	case strings.HasSuffix(lower, "tb"):
+		multiplier = 1000 * 1000 * 1000 * 1000
+		unitLen = 2
 	case strings.HasSuffix(lower, "t"):
 		multiplier = 1024 * 1024 * 1024 * 1024
-		value = value[:len(value)-1]
-	case strings.HasSuffix(lower, "gib"), strings.HasSuffix(lower, "gi"), strings.HasSuffix(lower, "gb"):
+		unitLen = 1
+	case strings.HasSuffix(lower, "gib"):
 		multiplier = 1024 * 1024 * 1024
-		value = value[:len(value)-2]
+		unitLen = 3
+	case strings.HasSuffix(lower, "gi"):
+		multiplier = 1024 * 1024 * 1024
+		unitLen = 2
+	case strings.HasSuffix(lower, "gb"):
+		multiplier = 1000 * 1000 * 1000
+		unitLen = 2
 	case strings.HasSuffix(lower, "g"):
 		multiplier = 1024 * 1024 * 1024
-		value = value[:len(value)-1]
-	case strings.HasSuffix(lower, "mib"), strings.HasSuffix(lower, "mi"), strings.HasSuffix(lower, "mb"):
+		unitLen = 1
+	case strings.HasSuffix(lower, "mib"):
 		multiplier = 1024 * 1024
-		value = value[:len(value)-2]
+		unitLen = 3
+	case strings.HasSuffix(lower, "mi"):
+		multiplier = 1024 * 1024
+		unitLen = 2
+	case strings.HasSuffix(lower, "mb"):
+		multiplier = 1000 * 1000
+		unitLen = 2
 	case strings.HasSuffix(lower, "m"):
 		multiplier = 1024 * 1024
-		value = value[:len(value)-1]
-	case strings.HasSuffix(lower, "kib"), strings.HasSuffix(lower, "ki"), strings.HasSuffix(lower, "kb"):
+		unitLen = 1
+	case strings.HasSuffix(lower, "kib"):
 		multiplier = 1024
-		value = value[:len(value)-2]
+		unitLen = 3
+	case strings.HasSuffix(lower, "ki"):
+		multiplier = 1024
+		unitLen = 2
+	case strings.HasSuffix(lower, "kb"):
+		multiplier = 1024
+		unitLen = 2
 	case strings.HasSuffix(lower, "k"):
 		multiplier = 1024
-		value = value[:len(value)-1]
+		unitLen = 1
+	default:
+		return 0
+	}
+
+	if unitLen > 0 && unitLen < len(value) {
+		value = value[:len(value)-unitLen]
+	} else {
+		return 0
 	}
 
 	num, err := strconv.ParseFloat(strings.TrimSpace(value), 64)

@@ -17,14 +17,14 @@ import (
 )
 
 func TestNewAgentInvalidURL(t *testing.T) {
-	_, err := New("node_1", "http://insecure", "token", "", "/tmp/outbox", "", "", "", nil)
+	_, err := New("node_1", "http://insecure", "token", "", "/tmp/outbox", "", "", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error for non-https URL")
 	}
 }
 
 func TestNewAgentInvalidURLPlainHTTP(t *testing.T) {
-	_, err := New("node_1", "http://example.com/api", "token", "", "/tmp/outbox", "", "", "", nil)
+	_, err := New("node_1", "http://example.com/api", "token", "", "/tmp/outbox", "", "", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error for http URL")
 	}
@@ -32,7 +32,7 @@ func TestNewAgentInvalidURLPlainHTTP(t *testing.T) {
 
 func TestHandleTaskSendsResult(t *testing.T) {
 	var sent admiral.TaskResult
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Admiral-Token") != "test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -47,7 +47,7 @@ func TestHandleTaskSendsResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ag, err := New("node_1", server.URL, "test-token", "", t.TempDir(), "", "", "", executorWrapper{})
+	ag, err := New("node_1", server.URL, "test-token", "", t.TempDir(), "", "", "", "", executorWrapper{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,14 +90,14 @@ func TestStartOutboxFlusherExitsOnCancel(t *testing.T) {
 
 func TestSendCallback(t *testing.T) {
 	var gotMethod, gotPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	ag, err := New("node_1", server.URL, "token", "", t.TempDir(), "", "", "", executorWrapper{})
+	ag, err := New("node_1", server.URL, "token", "", t.TempDir(), "", "", "", "", executorWrapper{})
 	if err != nil {
 		t.Fatal(err)
 	}
