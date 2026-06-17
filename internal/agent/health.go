@@ -478,7 +478,7 @@ func (a *Agent) postHealth(report healthReport) error {
 		return fmt.Errorf("create health request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Admiral-Token", a.SharedToken)
+	req.Header.Set("X-Admiral-Token", a.FleetToken)
 
 	resp, err := a.http.Do(req)
 	if err != nil {

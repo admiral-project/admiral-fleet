@@ -19,7 +19,7 @@ import (
 type Agent struct {
 	NodeID                string
 	APIURL                string
-	SharedToken           string
+	FleetToken           string
 	StorageCheckInterval  string
 	StorageExceededAction string
 	RootlessUser          string
@@ -29,7 +29,7 @@ type Agent struct {
 	outbox                *outbox
 }
 
-func New(nodeID, apiURL, sharedToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir string, exec executor.Executor) (*Agent, error) {
+func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir string, exec executor.Executor) (*Agent, error) {
 	if err := tlsconfig.ValidateURLScheme(apiURL, "https"); err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func New(nodeID, apiURL, sharedToken, caCertFile, outboxDir, storageCheckInterva
 	return &Agent{
 		NodeID:                nodeID,
 		APIURL:                apiURL,
-		SharedToken:           sharedToken,
+		FleetToken:           fleetToken,
 		StorageCheckInterval:  storageCheckInterval,
 		StorageExceededAction: storageExceededAction,
 		RootlessUser:          rootlessUser,
@@ -96,7 +96,7 @@ func (a *Agent) postStorage(report admiral.StorageReport) error {
 		return fmt.Errorf("create storage request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Admiral-Token", a.SharedToken)
+	req.Header.Set("X-Admiral-Token", a.FleetToken)
 
 	resp, err := a.http.Do(req)
 	if err != nil {
@@ -135,7 +135,7 @@ func (a *Agent) send(result admiral.TaskResult) error {
 		return fmt.Errorf("create callback request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Admiral-Token", a.SharedToken)
+	req.Header.Set("X-Admiral-Token", a.FleetToken)
 
 	resp, err := a.http.Do(req)
 	if err != nil {

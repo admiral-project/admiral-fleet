@@ -135,7 +135,7 @@ func TestPostStorage(t *testing.T) {
 	ag := &Agent{
 		NodeID:      "node_1",
 		APIURL:      server.URL,
-		SharedToken: "tok",
+		FleetToken: "tok",
 		http:        server.Client(),
 	}
 
@@ -467,7 +467,7 @@ func TestPostHealth(t *testing.T) {
 
 	ag := &Agent{
 		APIURL:      server.URL,
-		SharedToken: "tok",
+		FleetToken: "tok",
 		http:        server.Client(),
 	}
 
