@@ -17,7 +17,7 @@ type Config struct {
 	QueueDatabaseURL      string
 	APIURL                string
 	APICACertFile         string
-	FleetToken           string
+	FleetToken            string
 	Executor              string
 	QuadletDir            string
 	DataDir               string
@@ -36,7 +36,7 @@ func Load() (*Config, error) {
 		QueueDatabaseURL:      os.Getenv("ADMIRAL_QUEUE_DATABASE_URL"),
 		APIURL:                getEnv("ADMIRAL_API_URL", "https://127.0.0.1:8080"),
 		APICACertFile:         os.Getenv("ADMIRAL_API_CA_FILE"),
-		FleetToken:           os.Getenv("ADMIRAL_FLEET_TOKEN"),
+		FleetToken:            os.Getenv("ADMIRAL_FLEET_TOKEN"),
 		Executor:              getEnv("ADMIRAL_FLEET_EXECUTOR", "simulated"),
 		QuadletDir:            getEnv("ADMIRAL_FLEET_QUADLET_DIR", "/etc/containers/systemd/admiral"),
 		DataDir:               getEnv("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),

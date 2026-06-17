@@ -133,10 +133,10 @@ func TestPostStorage(t *testing.T) {
 	defer server.Close()
 
 	ag := &Agent{
-		NodeID:      "node_1",
-		APIURL:      server.URL,
+		NodeID:     "node_1",
+		APIURL:     server.URL,
 		FleetToken: "tok",
-		http:        server.Client(),
+		http:       server.Client(),
 	}
 
 	report := admiral.StorageReport{
@@ -466,9 +466,9 @@ func TestPostHealth(t *testing.T) {
 	defer server.Close()
 
 	ag := &Agent{
-		APIURL:      server.URL,
+		APIURL:     server.URL,
 		FleetToken: "tok",
-		http:        server.Client(),
+		http:       server.Client(),
 	}
 
 	report := healthReport{

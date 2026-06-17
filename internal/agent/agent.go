@@ -19,7 +19,7 @@ import (
 type Agent struct {
 	NodeID                string
 	APIURL                string
-	FleetToken           string
+	FleetToken            string
 	StorageCheckInterval  string
 	StorageExceededAction string
 	RootlessUser          string
@@ -41,7 +41,7 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 	return &Agent{
 		NodeID:                nodeID,
 		APIURL:                apiURL,
-		FleetToken:           fleetToken,
+		FleetToken:            fleetToken,
 		StorageCheckInterval:  storageCheckInterval,
 		StorageExceededAction: storageExceededAction,
 		RootlessUser:          rootlessUser,
