@@ -18,6 +18,7 @@ type Config struct {
 	APIURL                string
 	APICACertFile         string
 	FleetToken            string
+	TaskPublicKey         string
 	Executor              string
 	QuadletDir            string
 	DataDir               string
@@ -37,6 +38,7 @@ func Load() (*Config, error) {
 		APIURL:                getEnv("ADMIRAL_API_URL", "https://127.0.0.1:8080"),
 		APICACertFile:         os.Getenv("ADMIRAL_API_CA_FILE"),
 		FleetToken:            os.Getenv("ADMIRAL_FLEET_TOKEN"),
+		TaskPublicKey:         os.Getenv("ADMIRAL_TASK_PUBLIC_KEY"),
 		Executor:              getEnv("ADMIRAL_FLEET_EXECUTOR", "simulated"),
 		QuadletDir:            getEnv("ADMIRAL_FLEET_QUADLET_DIR", "/etc/containers/systemd/admiral"),
 		DataDir:               getEnv("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),

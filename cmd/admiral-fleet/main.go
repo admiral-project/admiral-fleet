@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"log/slog"
 	"os"
 	"time"
@@ -24,7 +26,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	consumer, err := queue.NewConsumer(cfg.QueueDatabaseURL, cfg.NodeID)
+	var pubKey ed25519.PublicKey
+	if cfg.TaskPublicKey != "" {
+		raw, err := hex.DecodeString(cfg.TaskPublicKey)
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			slog.Error("invalid ADMIRAL_TASK_PUBLIC_KEY", "error", "must be 64 hex chars (32 bytes)")
+			os.Exit(1)
+		}
+		pubKey = ed25519.PublicKey(raw)
+	}
+
+	consumer, err := queue.NewConsumer(cfg.QueueDatabaseURL, cfg.NodeID, pubKey)
 	if err != nil {
 		slog.Error("queue error", "error", err)
 		os.Exit(1)

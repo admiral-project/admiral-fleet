@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: William Moreno Reyes CP | MBA
-// SPDX-License-Identifier: Apache-2.0
-
 package queue
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +18,7 @@ import (
 const (
 	defaultPollInterval  = 2 * time.Second
 	defaultLeaseDuration = 5 * time.Minute
+	taskMaxAge           = 5 * time.Minute
 )
 
 var errNoCommandAvailable = errors.New("no command available")
@@ -29,6 +29,7 @@ type Consumer struct {
 	consumerID    string
 	pollInterval  time.Duration
 	leaseDuration time.Duration
+	publicKey     ed25519.PublicKey
 }
 
 type claimedCommand struct {
@@ -36,9 +37,11 @@ type claimedCommand struct {
 	task         admiral.FleetTask
 	attemptCount int
 	maxAttempts  int
+	signature    string
+	signedAt     int64
 }
 
-func NewConsumer(dbURL, nodeID string) (*Consumer, error) {
+func NewConsumer(dbURL, nodeID string, publicKey ed25519.PublicKey) (*Consumer, error) {
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		return nil, fmt.Errorf("open queue database: %w", err)
@@ -55,6 +58,7 @@ func NewConsumer(dbURL, nodeID string) (*Consumer, error) {
 		consumerID:    fmt.Sprintf("%s-%d", nodeID, time.Now().UnixNano()),
 		pollInterval:  defaultPollInterval,
 		leaseDuration: defaultLeaseDuration,
+		publicKey:     publicKey,
 	}, nil
 }
 
@@ -68,6 +72,14 @@ func (c *Consumer) ConsumeLoop(handler func(admiral.FleetTask) error) {
 			}
 			slog.Error("queue claim failed", "error", err)
 			time.Sleep(c.pollInterval)
+			continue
+		}
+
+		if err := c.verifyTask(cmd); err != nil {
+			slog.Error("task verification failed, discarding", "command_id", cmd.id, "error", err)
+			if derr := c.discardCommand(cmd.id, err.Error()); derr != nil {
+				slog.Error("failed to discard invalid command", "command_id", cmd.id, "error", derr)
+			}
 			continue
 		}
 
@@ -91,6 +103,44 @@ func (c *Consumer) ConsumeLoop(handler func(admiral.FleetTask) error) {
 			slog.Error("failed to mark command success", "command_id", cmd.id, "error", err)
 		}
 	}
+}
+
+func (c *Consumer) verifyTask(cmd *claimedCommand) error {
+	if c.publicKey == nil {
+		return nil
+	}
+	if cmd.signature == "" || cmd.signedAt == 0 {
+		return fmt.Errorf("task %s has no signature", cmd.id)
+	}
+	age := time.Since(time.Unix(cmd.signedAt, 0))
+	if age > taskMaxAge {
+		return fmt.Errorf("task %s expired: signed %v ago (max %v)", cmd.id, age, taskMaxAge)
+	}
+	sig, err := hex.DecodeString(cmd.signature)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return fmt.Errorf("task %s has invalid signature encoding", cmd.id)
+	}
+	payload, err := json.Marshal(cmd.task)
+	if err != nil {
+		return fmt.Errorf("task %s: re-serialize for verification: %w", cmd.id, err)
+	}
+	msg := append(payload, []byte(fmt.Sprintf("%d", cmd.signedAt))...)
+	if !ed25519.Verify(c.publicKey, msg, sig) {
+		return fmt.Errorf("task %s signature verification failed", cmd.id)
+	}
+	return nil
+}
+
+func (c *Consumer) discardCommand(id, reason string) error {
+	_, err := c.db.Exec(`
+		UPDATE fleet_commands
+		SET status = $1,
+			last_error = $2,
+			completed_at = CURRENT_TIMESTAMP,
+			leased_until = NULL
+		WHERE id = $3
+	`, string(admiral.CommandFailed), "signature: "+reason, id)
+	return err
 }
 
 func leaseRefreshInterval(leaseDuration time.Duration) time.Duration {
@@ -160,7 +210,7 @@ func (c *Consumer) claimNext(ctx context.Context) (*claimedCommand, error) {
 			attempt_count = attempt_count + 1
 		FROM next_command
 		WHERE fc.id = next_command.id
-		RETURNING fc.id, fc.payload, fc.attempt_count, fc.max_attempts
+		RETURNING fc.id, fc.payload, fc.attempt_count, fc.max_attempts, fc.task_signature, fc.signed_at
 	`, c.nodeID, string(admiral.CommandPending), string(admiral.CommandLeased), c.consumerID, int(c.leaseDuration.Seconds()))
 
 	var (
@@ -168,8 +218,10 @@ func (c *Consumer) claimNext(ctx context.Context) (*claimedCommand, error) {
 		payload      []byte
 		attemptCount int
 		maxAttempts  int
+		sig          sql.NullString
+		signedAt     sql.NullInt64
 	)
-	if err := row.Scan(&id, &payload, &attemptCount, &maxAttempts); err != nil {
+	if err := row.Scan(&id, &payload, &attemptCount, &maxAttempts, &sig, &signedAt); err != nil {
 		if err == sql.ErrNoRows {
 			if err := tx.Commit(); err != nil {
 				return nil, fmt.Errorf("commit empty claim tx: %w", err)
@@ -188,7 +240,23 @@ func (c *Consumer) claimNext(ctx context.Context) (*claimedCommand, error) {
 		return nil, fmt.Errorf("commit claim tx: %w", err)
 	}
 
-	return &claimedCommand{id: id, task: task, attemptCount: attemptCount, maxAttempts: maxAttempts}, nil
+	sigStr := ""
+	if sig.Valid {
+		sigStr = sig.String
+	}
+	signedAtVal := int64(0)
+	if signedAt.Valid {
+		signedAtVal = signedAt.Int64
+	}
+
+	return &claimedCommand{
+		id:           id,
+		task:         task,
+		attemptCount: attemptCount,
+		maxAttempts:  maxAttempts,
+		signature:    sigStr,
+		signedAt:     signedAtVal,
+	}, nil
 }
 
 func (c *Consumer) markRunning(id string) error {
