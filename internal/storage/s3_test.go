@@ -195,10 +195,9 @@ func TestPutObject(t *testing.T) {
 }
 
 func TestGetObject(t *testing.T) {
-	var gotMethod, gotPath string
+	var gotMethod string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
-		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Write([]byte("stored data"))
 	}))
