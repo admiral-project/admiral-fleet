@@ -61,13 +61,12 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 		t.Fatal("unexpected .network file when pod is used")
 	}
 
-	// Verify env file contains only regular env vars, NOT secrets
 	envPath := filepath.Join(dataDir, "instances", "demo001", "env", "db.env")
 	envData, err := os.ReadFile(envPath)
 	if err != nil {
 		t.Fatalf("read db env: %v", err)
 	}
-	if string(envData) != "POSTGRES_DB=whoami\n" {
+	if string(envData) != "POSTGRES_DB=whoami\nPOSTGRES_PASSWORD=secret\nPOSTGRES_USER=user\n" {
 		t.Fatalf("unexpected env file: %q", string(envData))
 	}
 	envInfo, err := os.Stat(envPath)
@@ -121,29 +120,6 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	}
 	if !strings.Contains(got, "CgroupsMode=no-conmon") {
 		t.Fatalf("expected cgroups mode in container file, got %q", got)
-	}
-	// App service has no secrets, so no Secret= lines
-	if strings.Contains(got, "Secret=") {
-		t.Fatal("unexpected Secret= in app container file (app has no secrets)")
-	}
-	if !strings.Contains(got, "EnvironmentFile=") {
-		t.Fatal("expected EnvironmentFile= in container file")
-	}
-
-	// Verify db container has Secret= lines for secrets (not in env file)
-	dbData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-demo001-db.container"))
-	if err != nil {
-		t.Fatalf("read db container: %v", err)
-	}
-	dbGot := string(dbData)
-	if !strings.Contains(dbGot, "Secret=admiral-demo001-db-POSTGRES_PASSWORD,type=env,target=POSTGRES_PASSWORD") {
-		t.Fatalf("expected Secret= for POSTGRES_PASSWORD in db container, got %q", dbGot)
-	}
-	if !strings.Contains(dbGot, "Secret=admiral-demo001-db-POSTGRES_USER,type=env,target=POSTGRES_USER") {
-		t.Fatalf("expected Secret= for POSTGRES_USER in db container, got %q", dbGot)
-	}
-	if !strings.Contains(dbGot, "EnvironmentFile=") {
-		t.Fatal("expected EnvironmentFile= in db container file")
 	}
 }
 
@@ -326,65 +302,6 @@ func TestRenderVolume(t *testing.T) {
 func TestSafeName(t *testing.T) {
 	if got := SafeName("demo.001/example"); got != "demo-001-example" {
 		t.Fatalf("unexpected safe name %q", got)
-	}
-}
-
-func TestSecretName(t *testing.T) {
-	got := SecretName("inst_001", "db", "POSTGRES_PASSWORD")
-	want := "admiral-inst_001-db-POSTGRES_PASSWORD"
-	if got != want {
-		t.Fatalf("SecretName() = %q; want %q", got, want)
-	}
-}
-
-func TestSecretNameSanitizesSpecialChars(t *testing.T) {
-	got := SecretName("inst.001/abc", "my-svc", "DB_PASS")
-	want := "admiral-inst-001-abc-my-svc-DB_PASS"
-	if got != want {
-		t.Fatalf("SecretName() = %q; want %q", got, want)
-	}
-}
-
-func TestRenderSecretLines(t *testing.T) {
-	svc := admiral.ServiceInfo{
-		Name:    "db",
-		Secrets: map[string]string{"POSTGRES_PASSWORD": "secret", "POSTGRES_USER": "user"},
-	}
-	got := renderSecretLines("inst001", svc)
-	if !strings.Contains(got, "Secret=admiral-inst001-db-POSTGRES_PASSWORD,type=env,target=POSTGRES_PASSWORD") {
-		t.Fatalf("expected Secret= for POSTGRES_PASSWORD, got:\n%s", got)
-	}
-	if !strings.Contains(got, "Secret=admiral-inst001-db-POSTGRES_USER,type=env,target=POSTGRES_USER") {
-		t.Fatalf("expected Secret= for POSTGRES_USER, got:\n%s", got)
-	}
-}
-
-func TestRenderSecretLinesEmpty(t *testing.T) {
-	svc := admiral.ServiceInfo{
-		Name: "web",
-	}
-	got := renderSecretLines("inst001", svc)
-	if got != "" {
-		t.Fatalf("expected empty string for service with no secrets, got %q", got)
-	}
-}
-
-func TestRenderEnvExcludesSecrets(t *testing.T) {
-	svc := admiral.ServiceInfo{
-		Name: "db",
-		Env: map[string]string{
-			"POSTGRES_DB": "whoami",
-		},
-		Secrets: map[string]string{
-			"POSTGRES_PASSWORD": "secret",
-		},
-	}
-	got := renderEnv(svc)
-	if strings.Contains(got, "POSTGRES_PASSWORD") {
-		t.Fatalf("renderEnv should not contain secrets, got:\n%s", got)
-	}
-	if !strings.Contains(got, "POSTGRES_DB=whoami") {
-		t.Fatalf("renderEnv should contain regular env vars, got:\n%s", got)
 	}
 }
 

@@ -140,22 +140,6 @@ func (i *Inspector) CopyToContainer(ctx context.Context, sourcePath, containerPa
 	return i.run(ctx, "cp", sourcePath, containerPath)
 }
 
-func (i *Inspector) SecretCreate(ctx context.Context, name, value string) error {
-	_, err := i.runWithStdin(ctx, strings.NewReader(value), "secret", "create", "--replace", name)
-	if err != nil {
-		return fmt.Errorf("podman secret create %q: %w", name, err)
-	}
-	return nil
-}
-
-func (i *Inspector) SecretRemove(ctx context.Context, name string) error {
-	_, err := i.run(ctx, "secret", "rm", name)
-	if err != nil {
-		return fmt.Errorf("podman secret rm %q: %w", name, err)
-	}
-	return nil
-}
-
 func (i *Inspector) RemovePod(ctx context.Context, podName string) error {
 	_, err := i.run(ctx, "pod", "rm", "--force", podName)
 	return err
