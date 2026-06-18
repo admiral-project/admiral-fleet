@@ -168,6 +168,10 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 		fmt.Fprintf(&b, "Exec=%s\n", sanitizeQuadletValue(svc.Command))
 	}
 	fmt.Fprintf(&b, "EnvironmentFile=%s\n", envPath)
+	secretLines := renderSecretLines(instanceID, svc)
+	if secretLines != "" {
+		fmt.Fprint(&b, secretLines)
+	}
 	fmt.Fprintf(&b, "Pod=%s\n", PodFileName(instanceID))
 	fmt.Fprintf(&b, "CgroupsMode=no-conmon\n")
 	if svc.Volume != "" {
@@ -216,13 +220,9 @@ func renderVolume(instanceID, serviceName, target string) string {
 }
 
 func renderEnv(svc admiral.ServiceInfo) string {
-	keys := make([]string, 0, len(svc.Env)+len(svc.Secrets))
-	values := make(map[string]string, len(svc.Env)+len(svc.Secrets))
+	keys := make([]string, 0, len(svc.Env))
+	values := make(map[string]string, len(svc.Env))
 	for k, v := range svc.Env {
-		keys = append(keys, k)
-		values[k] = v
-	}
-	for k, v := range svc.Secrets {
 		keys = append(keys, k)
 		values[k] = v
 	}
@@ -231,6 +231,27 @@ func renderEnv(svc admiral.ServiceInfo) string {
 	var b strings.Builder
 	for _, k := range keys {
 		fmt.Fprintf(&b, "%s=%s\n", k, sanitizeEnvValue(values[k]))
+	}
+	return b.String()
+}
+
+func SecretName(instanceID, serviceName, envName string) string {
+	return fmt.Sprintf("admiral-%s-%s-%s", SafeName(instanceID), SafeName(serviceName), SafeName(envName))
+}
+
+func renderSecretLines(instanceID string, svc admiral.ServiceInfo) string {
+	if len(svc.Secrets) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(svc.Secrets))
+	for k := range svc.Secrets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		name := SecretName(instanceID, svc.Name, k)
+		fmt.Fprintf(&b, "Secret=%s,type=env,target=%s\n", name, sanitizeQuadletValue(k))
 	}
 	return b.String()
 }

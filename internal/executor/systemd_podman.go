@@ -199,6 +199,11 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = fmt.Sprintf("render quadlet for instance %q: %v", task.InstanceID, err)
 		return result
 	}
+	if err := e.createInstanceSecrets(ctx, task); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
 	if err := e.chownInstanceData(task.InstanceID); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("chown instance data for %q: %v", task.InstanceID, err)
@@ -271,6 +276,11 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 	if err := r.Render(task); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("render quadlet on start for instance %q: %v", task.InstanceID, err)
+		return result
+	}
+	if err := e.createInstanceSecrets(ctx, task); err != nil {
+		result.Success = false
+		result.Error = err.Error()
 		return result
 	}
 	if err := e.chownInstanceData(task.InstanceID); err != nil {
@@ -391,6 +401,9 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 			_ = e.podman().RemoveVolume(ctx, vName)
 		}
 	}
+
+	// Remove Podman secrets
+	e.removeInstanceSecrets(ctx, task)
 
 	// Remove Quadlet files
 	if err := e.renderer().Remove(task.InstanceID); err != nil {
@@ -1078,6 +1091,27 @@ func (e *SystemdPodmanExecutor) renderer() *quadlet.Renderer {
 		return e.Renderer
 	}
 	return quadlet.NewRenderer("", "")
+}
+
+func (e *SystemdPodmanExecutor) createInstanceSecrets(ctx context.Context, task admiral.FleetTask) error {
+	for _, svc := range task.Services {
+		for envName, secretValue := range svc.Secrets {
+			secretName := quadlet.SecretName(task.InstanceID, svc.Name, envName)
+			if err := e.podman().SecretCreate(ctx, secretName, secretValue); err != nil {
+				return fmt.Errorf("create secret %q for instance %q: %w", secretName, task.InstanceID, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (e *SystemdPodmanExecutor) removeInstanceSecrets(ctx context.Context, task admiral.FleetTask) {
+	for _, svc := range task.Services {
+		for envName := range svc.Secrets {
+			secretName := quadlet.SecretName(task.InstanceID, svc.Name, envName)
+			_ = e.podman().SecretRemove(ctx, secretName)
+		}
+	}
 }
 
 func containerName(instanceID, serviceName string) string {
