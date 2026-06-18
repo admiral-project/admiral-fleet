@@ -501,6 +501,88 @@ func TestPostHealthHTTPError(t *testing.T) {
 	}
 }
 
+func TestFetchTaskEncryptionKey(t *testing.T) {
+	var gotToken string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v1/nodes/task-encryption-key" {
+			t.Errorf("expected /api/v1/nodes/task-encryption-key, got %s", r.URL.Path)
+		}
+		gotToken = r.Header.Get("X-Admiral-Token")
+		writeJSON(w, http.StatusOK, map[string]string{"task_encryption_key": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"})
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		APIURL:     server.URL,
+		FleetToken: "test-node-token",
+		http:       server.Client(),
+	}
+
+	key, err := ag.FetchTaskEncryptionKey()
+	if err != nil {
+		t.Fatalf("FetchTaskEncryptionKey: %v", err)
+	}
+	if gotToken != "test-node-token" {
+		t.Fatalf("expected X-Admiral-Token = test-node-token, got %q", gotToken)
+	}
+	if key != "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2" {
+		t.Fatalf("unexpected key %q", key)
+	}
+}
+
+func TestFetchTaskEncryptionKeyUnauthorized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		APIURL: server.URL,
+		http:   server.Client(),
+	}
+	_, err := ag.FetchTaskEncryptionKey()
+	if err == nil {
+		t.Fatal("expected error for HTTP 401")
+	}
+}
+
+func TestFetchTaskEncryptionKeyEmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"task_encryption_key": ""})
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		APIURL:     server.URL,
+		FleetToken: "tok",
+		http:       server.Client(),
+	}
+	_, err := ag.FetchTaskEncryptionKey()
+	if err == nil {
+		t.Fatal("expected error for empty key in response")
+	}
+}
+
+func TestFetchTaskEncryptionKeyMissingField(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"other": "value"})
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		APIURL:     server.URL,
+		FleetToken: "tok",
+		http:       server.Client(),
+	}
+	_, err := ag.FetchTaskEncryptionKey()
+	if err == nil {
+		t.Fatal("expected error for missing field in response")
+	}
+}
+
 func TestParseStorageLimitBytesEdgeCases(t *testing.T) {
 	tests := []struct {
 		input    string
