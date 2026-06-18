@@ -262,8 +262,10 @@ func (c *Consumer) claimNext(ctx context.Context) (*claimedCommand, error) {
 	}
 
 	var task admiral.FleetTask
-	if err := json.Unmarshal(payload, &task); err != nil {
-		// Check if payload is an encrypted wrapper
+	if err := json.Unmarshal(payload, &task); err != nil || task.TaskID == "" {
+		// Payload is either invalid JSON or an encrypted wrapper {"ct":"..."}.
+		// The encrypted wrapper is valid JSON so unmarshal succeeds, but
+		// leaves FleetTask fields at zero values — detect that via missing TaskID.
 		var wrapper struct {
 			Ct string `json:"ct"`
 		}
