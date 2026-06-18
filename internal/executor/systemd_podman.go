@@ -152,5 +152,3 @@ func (e *SystemdPodmanExecutor) Execute(ctx context.Context, task admiral.FleetT
 		return result
 	}
 }
-
-
