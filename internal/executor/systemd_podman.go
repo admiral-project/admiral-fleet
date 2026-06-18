@@ -250,7 +250,9 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 				}
 				select {
 				case <-ctx.Done():
-					break
+					result.Success = false
+					result.Error = fmt.Sprintf("provision cancelled while waiting for pod port: %v", ctx.Err())
+					return result
 				case <-time.After(1 * time.Second):
 				}
 			}
@@ -524,7 +526,7 @@ func (e *SystemdPodmanExecutor) startMetadata(ctx context.Context, task admiral.
 				}
 				select {
 				case <-ctx.Done():
-					break
+					return "", fmt.Errorf("start metadata cancelled while waiting for pod port: %w", ctx.Err())
 				case <-time.After(1 * time.Second):
 				}
 			}

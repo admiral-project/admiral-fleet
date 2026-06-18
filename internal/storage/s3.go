@@ -102,10 +102,7 @@ func (c *S3Client) DeleteObject(ctx context.Context, key string) error {
 }
 
 func (c *S3Client) Test(ctx context.Context) error {
-	healthKey := c.prefix + "/.health-check-tmp"
-	if strings.HasPrefix(healthKey, "/") {
-		healthKey = strings.TrimPrefix(healthKey, "/")
-	}
+	healthKey := strings.TrimPrefix(c.prefix+"/.health-check-tmp", "/")
 	if err := c.PutObject(ctx, healthKey, []byte("ok")); err != nil {
 		return fmt.Errorf("s3 test write: %w", err)
 	}
