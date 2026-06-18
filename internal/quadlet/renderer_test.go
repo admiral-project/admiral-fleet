@@ -66,7 +66,7 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read db env: %v", err)
 	}
-	if string(envData) != "POSTGRES_DB=whoami\nPOSTGRES_PASSWORD=secret\nPOSTGRES_USER=user\n" {
+	if string(envData) != "POSTGRES_DB=whoami\n" {
 		t.Fatalf("unexpected env file: %q", string(envData))
 	}
 	envInfo, err := os.Stat(envPath)
@@ -120,6 +120,27 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	}
 	if !strings.Contains(got, "CgroupsMode=no-conmon") {
 		t.Fatalf("expected cgroups mode in container file, got %q", got)
+	}
+
+	// Verify secret credentials are rendered as LoadCredentialEncrypted= instead of env vars
+	dbData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-demo001-db.container"))
+	if err != nil {
+		t.Fatalf("read db container: %v", err)
+	}
+	dbStr := string(dbData)
+	if !strings.Contains(dbStr, "LoadCredentialEncrypted=POSTGRES_PASSWORD:") {
+		t.Fatalf("expected LoadCredentialEncrypted=POSTGRES_PASSWORD in db container, got %q", dbStr)
+	}
+	if !strings.Contains(dbStr, "LoadCredentialEncrypted=POSTGRES_USER:") {
+		t.Fatalf("expected LoadCredentialEncrypted=POSTGRES_USER in db container, got %q", dbStr)
+	}
+	if strings.Contains(dbStr, "POSTGRES_PASSWORD=secret") {
+		t.Fatalf("secret should not appear in container file, got %q", dbStr)
+	}
+
+	// Verify cred path in LoadCredentialEncrypted references the correct file
+	if !strings.Contains(dbStr, CredFilePathPrefix(dataDir, "demo001", "db")) {
+		t.Fatalf("expected cred path prefix %q in db container, got %q", CredFilePathPrefix(dataDir, "demo001", "db"), dbStr)
 	}
 }
 

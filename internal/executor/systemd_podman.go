@@ -204,6 +204,11 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = fmt.Sprintf("chown instance data for %q: %v", task.InstanceID, err)
 		return result
 	}
+	if err := e.writeEncryptedSecrets(ctx, task); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("write encrypted secrets for %q: %v", task.InstanceID, err)
+		return result
+	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("reload systemd for instance %q: %v", task.InstanceID, err)
@@ -276,6 +281,11 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 	if err := e.chownInstanceData(task.InstanceID); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("chown instance data on start for %q: %v", task.InstanceID, err)
+		return result
+	}
+	if err := e.writeEncryptedSecrets(ctx, task); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("write encrypted secrets on start for %q: %v", task.InstanceID, err)
 		return result
 	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {
@@ -1754,4 +1764,28 @@ func gunzipBytes(data []byte) ([]byte, error) {
 func (e *SystemdPodmanExecutor) cleanupRestoreArtifact(path string) {
 	_ = e.FS.Remove(path)
 	_ = e.FS.RemoveAll(filepath.Dir(path))
+}
+
+func (e *SystemdPodmanExecutor) writeEncryptedSecrets(ctx context.Context, task admiral.FleetTask) error {
+	dataDir := e.DataDir
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = "/var/lib/admiral"
+	}
+
+	for _, svc := range task.Services {
+		if len(svc.Secrets) == 0 {
+			continue
+		}
+		credDir := quadlet.CredFilePathPrefix(dataDir, task.InstanceID, svc.Name)
+		if err := e.FS.MkdirAll(credDir, 0700); err != nil {
+			return fmt.Errorf("create cred dir for %q/%q: %w", task.InstanceID, svc.Name, err)
+		}
+		for k, v := range svc.Secrets {
+			path := credDir + "-" + quadlet.SafeName(k) + ".cred"
+			if err := systemd.EncryptCred(ctx, nil, k, strings.NewReader(v), path); err != nil {
+				return fmt.Errorf("encrypt secret %q for %q/%q: %w", k, task.InstanceID, svc.Name, err)
+			}
+		}
+	}
+	return nil
 }

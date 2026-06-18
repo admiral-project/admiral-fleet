@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -18,15 +19,28 @@ type Runner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
+type stdinRunner interface {
+	RunWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error)
+}
+
 type CommandRunner struct{}
 
 func (r CommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return r.runWithStdin(ctx, nil, name, args...)
+}
+
+func (r CommandRunner) RunWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
+	return r.runWithStdin(ctx, stdin, name, args...)
+}
+
+func (r CommandRunner) runWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
 	if err := security.ValidateExecParams(name, args); err != nil {
 		return nil, err
 	}
 	sanitizedArgs := security.SanitizeArgs(args)
 	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- name and args are validated by security.ValidateExecParams
 	cmd.Dir = "/tmp"
+	cmd.Stdin = stdin
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

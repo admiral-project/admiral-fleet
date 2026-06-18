@@ -173,8 +173,27 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	if svc.Volume != "" {
 		fmt.Fprintf(&b, "Volume=%s:%s\n", VolumeFileName(instanceID, svc.Name), defaultVolumeTarget(svc))
 	}
+	for _, line := range r.renderCredentialLines(instanceID, svc) {
+		fmt.Fprint(&b, line)
+	}
 	fmt.Fprintf(&b, "\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=%s\n", r.wantedBy())
 	return b.String()
+}
+
+func (r *Renderer) renderCredentialLines(instanceID string, svc admiral.ServiceInfo) []string {
+	keys := make([]string, 0, len(svc.Secrets))
+	for k := range svc.Secrets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	credDir := CredFilePathPrefix(r.DataDir, instanceID, svc.Name)
+	lines := make([]string, 0, len(keys))
+	for _, k := range keys {
+		path := credDir + "-" + SafeName(k) + ".cred"
+		lines = append(lines, fmt.Sprintf("LoadCredentialEncrypted=%s:%s\n", k, path))
+	}
+	return lines
 }
 
 func formatCPULimit(cpu float64) string {
@@ -216,13 +235,9 @@ func renderVolume(instanceID, serviceName, target string) string {
 }
 
 func renderEnv(svc admiral.ServiceInfo) string {
-	keys := make([]string, 0, len(svc.Env)+len(svc.Secrets))
-	values := make(map[string]string, len(svc.Env)+len(svc.Secrets))
+	keys := make([]string, 0, len(svc.Env))
+	values := make(map[string]string, len(svc.Env))
 	for k, v := range svc.Env {
-		keys = append(keys, k)
-		values[k] = v
-	}
-	for k, v := range svc.Secrets {
 		keys = append(keys, k)
 		values[k] = v
 	}
@@ -303,4 +318,8 @@ func defaultString(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func CredFilePathPrefix(dataDir, instanceID, serviceName string) string {
+	return fmt.Sprintf("%s/instances/%s/creds/%s", strings.TrimRight(dataDir, "/"), instanceID, serviceName)
 }
