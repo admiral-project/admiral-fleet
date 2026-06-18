@@ -168,60 +168,6 @@ func (e *SystemdPodmanExecutor) Execute(ctx context.Context, task admiral.FleetT
 	}
 }
 
-func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
-	for _, unit := range deprovisionUnitNames(task) {
-		_ = e.systemd().Stop(ctx, unit)
-		_ = e.systemd().Disable(ctx, unit)
-	}
-
-	// Force-remove the pod before removing service containers and volumes.
-	if usesPod(task) {
-		_ = e.podman().RemovePod(ctx, podName(task.InstanceID))
-	}
-
-	// Force-remove Podman containers and volumes
-	for _, svc := range task.Services {
-		cName := containerName(task.InstanceID, svc.Name)
-		_ = e.podman().RemoveContainer(ctx, cName)
-		if svc.Volume != "" {
-			vName := volumeName(task.InstanceID, svc.Name)
-			_ = e.podman().RemoveVolume(ctx, vName)
-		}
-	}
-
-	// Remove Quadlet files
-	if err := e.renderer().Remove(task.InstanceID); err != nil {
-		result.Success = false
-		result.Error = fmt.Sprintf("remove quadlet files for %q: %v", task.InstanceID, err)
-		return result
-	}
-
-	if err := e.systemd().DaemonReload(ctx); err != nil {
-		result.Success = false
-		result.Error = fmt.Sprintf("reload systemd after deprovision %q: %v", task.InstanceID, err)
-		return result
-	}
-
-	// Reset failed systemd states
-	_ = e.systemd().ResetFailed(ctx)
-
-	// Clean up instance data dir (ports.json, env files)
-	dataDir := e.DataDir
-	if strings.TrimSpace(dataDir) == "" {
-		dataDir = "/var/lib/admiral"
-	}
-	instDir := filepath.Join(dataDir, "instances", task.InstanceID)
-	if err := e.FS.RemoveAll(instDir); err != nil {
-		result.Success = false
-		result.Error = fmt.Sprintf("clean up instance data dir %q: %v", instDir, err)
-		return result
-	}
-
-	result.Success = true
-	result.Logs = fmt.Sprintf("deprovisioned instance %s", task.InstanceID)
-	return result
-}
-
 func (e *SystemdPodmanExecutor) inspect(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
 	snapshot, err := e.inspectSnapshot(ctx, task)
 	if err != nil {
@@ -874,16 +820,6 @@ func usesPod(_ admiral.FleetTask) bool {
 
 func unitNames(task admiral.FleetTask) []string {
 	return []string{quadlet.PodUnitName(task.InstanceID)}
-}
-
-func deprovisionUnitNames(task admiral.FleetTask) []string {
-	units := unitNames(task)
-	for _, svc := range task.Services {
-		if svc.Volume != "" {
-			units = append(units, quadlet.VolumeUnitName(task.InstanceID, svc.Name))
-		}
-	}
-	return units
 }
 
 func volumeName(instanceID, serviceName string) string {
