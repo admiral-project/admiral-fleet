@@ -40,7 +40,7 @@ func Load() (*Config, error) {
 		APICACertFile:         os.Getenv("ADMIRAL_API_CA_FILE"),
 		FleetToken:            os.Getenv("ADMIRAL_FLEET_TOKEN"),
 		TaskPublicKey:         os.Getenv("ADMIRAL_TASK_PUBLIC_KEY"),
-		TaskEncryptionKey:      os.Getenv("ADMIRAL_TASK_ENCRYPTION_KEY"),
+		TaskEncryptionKey:     os.Getenv("ADMIRAL_TASK_ENCRYPTION_KEY"),
 		Executor:              getEnv("ADMIRAL_FLEET_EXECUTOR", "simulated"),
 		QuadletDir:            getEnv("ADMIRAL_FLEET_QUADLET_DIR", "/etc/containers/systemd/admiral"),
 		DataDir:               getEnv("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),

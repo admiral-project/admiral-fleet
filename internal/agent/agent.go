@@ -124,6 +124,39 @@ func (a *Agent) StartOutboxFlusher(ctx context.Context, interval time.Duration) 
 	}
 }
 
+// FetchTaskEncryptionKey retrieves the shared AES-256-GCM task encryption key
+// from admirald. The request is authenticated with the per-node fleet token.
+// This is called at startup when the key is not set in the local environment,
+// eliminating the need for out-of-band distribution via Ansible.
+func (a *Agent) FetchTaskEncryptionKey() (string, error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, a.APIURL+"/api/v1/nodes/task-encryption-key", nil)
+	if err != nil {
+		return "", fmt.Errorf("create task-encryption-key request: %w", err)
+	}
+	req.Header.Set("X-Admiral-Token", a.FleetToken)
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch task-encryption-key: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("task-encryption-key returned HTTP %d", resp.StatusCode)
+	}
+
+	var result struct {
+		TaskEncryptionKey string `json:"task_encryption_key"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode task-encryption-key response: %w", err)
+	}
+	if result.TaskEncryptionKey == "" {
+		return "", fmt.Errorf("task-encryption-key response is empty")
+	}
+	return result.TaskEncryptionKey, nil
+}
+
 func (a *Agent) send(result admiral.TaskResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {

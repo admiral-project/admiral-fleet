@@ -46,6 +46,30 @@ func main() {
 		}
 	}
 
+	exec := buildExecutor(cfg)
+	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.FleetToken, cfg.APICACertFile, cfg.CallbackOutbox, cfg.StorageCheckInterval, cfg.StorageExceededAction, cfg.RootlessUser, cfg.QuadletDir, exec)
+	if err != nil {
+		slog.Error("agent configuration error", "error", err)
+		os.Exit(1)
+	}
+
+	// If the task encryption key was not provided in the local environment,
+	// fetch it from admirald. This allows worker nodes to obtain the shared
+	// key on first startup without requiring Ansible or packaging to deliver it.
+	if len(encKey) == 0 {
+		hexKey, err := fleetAgent.FetchTaskEncryptionKey()
+		if err != nil {
+			slog.Error("failed to fetch task encryption key from admirald", "error", err)
+			os.Exit(1)
+		}
+		encKey, err = hex.DecodeString(hexKey)
+		if err != nil || len(encKey) != 32 {
+			slog.Error("invalid task encryption key from admirald", "error", "must be 64 hex chars after hex decode")
+			os.Exit(1)
+		}
+		slog.Info("fetched task encryption key from admirald", nil)
+	}
+
 	consumer, err := queue.NewConsumer(cfg.QueueDatabaseURL, cfg.NodeID, pubKey, encKey)
 	if err != nil {
 		slog.Error("queue error", "error", err)
@@ -53,12 +77,6 @@ func main() {
 	}
 	defer consumer.Close()
 
-	exec := buildExecutor(cfg)
-	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.FleetToken, cfg.APICACertFile, cfg.CallbackOutbox, cfg.StorageCheckInterval, cfg.StorageExceededAction, cfg.RootlessUser, cfg.QuadletDir, exec)
-	if err != nil {
-		slog.Error("agent configuration error", "error", err)
-		os.Exit(1)
-	}
 	slog.Info("admiral-fleet started", "node_id", cfg.NodeID, "executor", cfg.Executor)
 	agent.StartHTTPServer(cfg.HTTPAddr, cfg.NodeID, cfg.Executor, cfg.PublicHost, cfg.PublicPort)
 	go fleetAgent.StartHealthChecker(context.Background())
