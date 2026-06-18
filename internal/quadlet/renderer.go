@@ -236,11 +236,30 @@ func renderEnv(svc admiral.ServiceInfo) string {
 }
 
 func sanitizeQuadletValue(value string) string {
-	return strings.NewReplacer("\n", " ", "\r", " ", "\x00", "").Replace(value)
+	// Remove null bytes and replace line breaks with spaces
+	value = strings.NewReplacer("\n", " ", "\r", " ", "\x00", "").Replace(value)
+	// Whitelist printable ASCII characters excluding backslash, backtick, and dollar
+	var b strings.Builder
+	for _, r := range value {
+		if r >= ' ' && r <= '~' && r != '\\' && r != '`' && r != '$' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
 }
 
 func sanitizeEnvValue(value string) string {
-	return strings.NewReplacer("\n", "\\n", "\r", "\\r", "\x00", "").Replace(value)
+	value = strings.NewReplacer(
+		"\n", "\\n",
+		"\r", "\\r",
+		"\x00", "",
+		`\`, `\\`,
+		`"`, `\"`,
+		`$`, `\$`,
+	).Replace(value)
+	return value
 }
 
 func podName(instanceID string) string {

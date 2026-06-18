@@ -304,3 +304,94 @@ func TestSafeName(t *testing.T) {
 		t.Fatalf("unexpected safe name %q", got)
 	}
 }
+
+func TestSanitizeQuadletValueRemovesNewlines(t *testing.T) {
+	got := sanitizeQuadletValue("nginx\nAdminAuth=foo")
+	if got != "nginx AdminAuth=foo" {
+		t.Fatalf("expected sanitized value, got %q", got)
+	}
+}
+
+func TestSanitizeQuadletValueRemovesNullBytes(t *testing.T) {
+	got := sanitizeQuadletValue("nginx\x00evil")
+	if got != "nginxevil" {
+		t.Fatalf("expected null byte removed entirely, got %q", got)
+	}
+}
+
+func TestSanitizeQuadletValueReplacesBackslash(t *testing.T) {
+	got := sanitizeQuadletValue("image\\;other")
+	if got != "image-;other" {
+		t.Fatalf("expected backslash replaced, got %q", got)
+	}
+}
+
+func TestSanitizeQuadletValueReplacesBacktick(t *testing.T) {
+	got := sanitizeQuadletValue("echo `whoami`")
+	if got != "echo -whoami-" {
+		t.Fatalf("expected backticks replaced, got %q", got)
+	}
+}
+
+func TestSanitizeQuadletValueReplacesDollar(t *testing.T) {
+	got := sanitizeQuadletValue("echo $HOME")
+	if got != "echo -HOME" {
+		t.Fatalf("expected dollar replaced, got %q", got)
+	}
+}
+
+func TestSanitizeQuadletValueAllowsValidImage(t *testing.T) {
+	got := sanitizeQuadletValue("docker.io/library/wordpress:6")
+	if got != "docker.io/library/wordpress:6" {
+		t.Fatalf("expected valid image unchanged, got %q", got)
+	}
+}
+
+func TestSanitizeQuadletValueAllowsValidCommand(t *testing.T) {
+	got := sanitizeQuadletValue("/usr/sbin/nginx -g daemon off")
+	if got != "/usr/sbin/nginx -g daemon off" {
+		t.Fatalf("expected valid command unchanged, got %q", got)
+	}
+}
+
+func TestSanitizeEnvValueEscapesBackslash(t *testing.T) {
+	got := sanitizeEnvValue("C:\\path\\to\\dir")
+	if got != "C:\\\\path\\\\to\\\\dir" {
+		t.Fatalf("expected backslashes escaped, got %q", got)
+	}
+}
+
+func TestSanitizeEnvValueEscapesDoubleQuote(t *testing.T) {
+	got := sanitizeEnvValue("value with \"quotes\"")
+	if got != `value with \"quotes\"` {
+		t.Fatalf("expected quotes escaped, got %q", got)
+	}
+}
+
+func TestSanitizeEnvValueEscapesDollar(t *testing.T) {
+	got := sanitizeEnvValue("$HOME/$(whoami)")
+	if got != `\$HOME/\$(whoami)` {
+		t.Fatalf("expected dollar escaped, got %q", got)
+	}
+}
+
+func TestSanitizeEnvValueEscapesNewline(t *testing.T) {
+	got := sanitizeEnvValue("line1\nline2")
+	if got != "line1\\nline2" {
+		t.Fatalf("expected newline escaped, got %q", got)
+	}
+}
+
+func TestSanitizeEnvValueRemovesNullBytes(t *testing.T) {
+	got := sanitizeEnvValue("val\x00ue")
+	if got != "value" {
+		t.Fatalf("expected null byte removed, got %q", got)
+	}
+}
+
+func TestSanitizeEnvValueAllowsNormalValue(t *testing.T) {
+	got := sanitizeEnvValue("POSTGRES_PASSWORD=supersecret")
+	if got != "POSTGRES_PASSWORD=supersecret" {
+		t.Fatalf("expected normal value unchanged, got %q", got)
+	}
+}
