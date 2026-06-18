@@ -2,12 +2,17 @@ package queue
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
@@ -30,6 +35,7 @@ type Consumer struct {
 	pollInterval  time.Duration
 	leaseDuration time.Duration
 	publicKey     ed25519.PublicKey
+	encryptionKey []byte
 }
 
 type claimedCommand struct {
@@ -39,9 +45,10 @@ type claimedCommand struct {
 	maxAttempts  int
 	signature    string
 	signedAt     int64
+	rawPayload   []byte
 }
 
-func NewConsumer(dbURL, nodeID string, publicKey ed25519.PublicKey) (*Consumer, error) {
+func NewConsumer(dbURL, nodeID string, publicKey ed25519.PublicKey, encryptionKey []byte) (*Consumer, error) {
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		return nil, fmt.Errorf("open queue database: %w", err)
@@ -59,6 +66,7 @@ func NewConsumer(dbURL, nodeID string, publicKey ed25519.PublicKey) (*Consumer, 
 		pollInterval:  defaultPollInterval,
 		leaseDuration: defaultLeaseDuration,
 		publicKey:     publicKey,
+		encryptionKey: encryptionKey,
 	}, nil
 }
 
@@ -120,15 +128,39 @@ func (c *Consumer) verifyTask(cmd *claimedCommand) error {
 	if err != nil || len(sig) != ed25519.SignatureSize {
 		return fmt.Errorf("task %s has invalid signature encoding", cmd.id)
 	}
-	payload, err := json.Marshal(cmd.task)
-	if err != nil {
-		return fmt.Errorf("task %s: re-serialize for verification: %w", cmd.id, err)
-	}
-	msg := append(payload, []byte(fmt.Sprintf("%d", cmd.signedAt))...)
+	msg := append(cmd.rawPayload, []byte(fmt.Sprintf("%d", cmd.signedAt))...)
 	if !ed25519.Verify(c.publicKey, msg, sig) {
 		return fmt.Errorf("task %s signature verification failed", cmd.id)
 	}
 	return nil
+}
+
+func (c *Consumer) openPayload(b64Ciphertext string) ([]byte, error) {
+	if len(c.encryptionKey) == 0 {
+		return nil, fmt.Errorf("task is encrypted but no encryption key configured")
+	}
+	ciphertext, err := base64.StdEncoding.DecodeString(b64Ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decode base64 ciphertext: %w", err)
+	}
+	block, err := aes.NewCipher(c.encryptionKey)
+	if err != nil {
+		return nil, fmt.Errorf("create cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create gcm: %w", err)
+	}
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt payload: %w", err)
+	}
+	return plaintext, nil
 }
 
 func (c *Consumer) discardCommand(id, reason string) error {
@@ -233,7 +265,20 @@ func (c *Consumer) claimNext(ctx context.Context) (*claimedCommand, error) {
 
 	var task admiral.FleetTask
 	if err := json.Unmarshal(payload, &task); err != nil {
-		return nil, fmt.Errorf("decode command payload: %w", err)
+		// Check if payload is an encrypted wrapper
+		var wrapper struct {
+			Ct string `json:"ct"`
+		}
+		if uerr := json.Unmarshal(payload, &wrapper); uerr != nil || wrapper.Ct == "" {
+			return nil, fmt.Errorf("decode command payload: %w", err)
+		}
+		plaintext, derr := c.openPayload(wrapper.Ct)
+		if derr != nil {
+			return nil, fmt.Errorf("decrypt command payload: %w", derr)
+		}
+		if uerr := json.Unmarshal(plaintext, &task); uerr != nil {
+			return nil, fmt.Errorf("decode decrypted command payload: %w", uerr)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -256,6 +301,7 @@ func (c *Consumer) claimNext(ctx context.Context) (*claimedCommand, error) {
 		maxAttempts:  maxAttempts,
 		signature:    sigStr,
 		signedAt:     signedAtVal,
+		rawPayload:   payload,
 	}, nil
 }
 

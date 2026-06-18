@@ -36,7 +36,17 @@ func main() {
 		pubKey = ed25519.PublicKey(raw)
 	}
 
-	consumer, err := queue.NewConsumer(cfg.QueueDatabaseURL, cfg.NodeID, pubKey)
+	var encKey []byte
+	if cfg.TaskEncryptionKey != "" {
+		var err error
+		encKey, err = hex.DecodeString(cfg.TaskEncryptionKey)
+		if err != nil || len(encKey) != 32 {
+			slog.Error("invalid ADMIRAL_TASK_ENCRYPTION_KEY", "error", "must be 64 hex chars (32 bytes)")
+			os.Exit(1)
+		}
+	}
+
+	consumer, err := queue.NewConsumer(cfg.QueueDatabaseURL, cfg.NodeID, pubKey, encKey)
 	if err != nil {
 		slog.Error("queue error", "error", err)
 		os.Exit(1)
