@@ -67,7 +67,7 @@ func main() {
 			slog.Error("invalid task encryption key from admirald", "error", "must be 64 hex chars after hex decode")
 			os.Exit(1)
 		}
-		slog.Info("fetched task encryption key from admirald", nil)
+		slog.Info("fetched task encryption key from admirald")
 	}
 
 	consumer, err := queue.NewConsumer(cfg.QueueDatabaseURL, cfg.NodeID, pubKey, encKey)
