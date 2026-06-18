@@ -186,13 +186,13 @@ func NewS3FromConfig(cfg *admiral.StorageConfig) (*S3Client, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("storage config is nil")
 	}
-	accessKey := os.Getenv(cfg.AccessKeyEnv)
-	secretKey := os.Getenv(cfg.SecretKeyEnv)
+	accessKey := os.Getenv("ADMIRAL_S3_ACCESS_KEY_ID")
+	secretKey := os.Getenv("ADMIRAL_S3_SECRET_ACCESS_KEY")
 	if accessKey == "" {
-		return nil, fmt.Errorf("S3 access key env %q is not set", cfg.AccessKeyEnv)
+		return nil, fmt.Errorf("ADMIRAL_S3_ACCESS_KEY_ID is not set")
 	}
 	if secretKey == "" {
-		return nil, fmt.Errorf("S3 secret key env %q is not set", cfg.SecretKeyEnv)
+		return nil, fmt.Errorf("ADMIRAL_S3_SECRET_ACCESS_KEY is not set")
 	}
 	return NewS3Client(cfg.Endpoint, cfg.Region, cfg.Bucket, cfg.Prefix, accessKey, secretKey, cfg.ForcePathStyle), nil
 }

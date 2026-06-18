@@ -312,18 +312,18 @@ func TestS3TestWriteFails(t *testing.T) {
 }
 
 func TestNewS3FromConfig(t *testing.T) {
-	os.Setenv("TEST_ACCESS_KEY", "myaccesskey")
-	os.Setenv("TEST_SECRET_KEY", "mysecretkey")
-	defer os.Unsetenv("TEST_ACCESS_KEY")
-	defer os.Unsetenv("TEST_SECRET_KEY")
+	os.Setenv("ADMIRAL_S3_ACCESS_KEY_ID", "myaccesskey")
+	os.Setenv("ADMIRAL_S3_SECRET_ACCESS_KEY", "mysecretkey")
+	defer os.Unsetenv("ADMIRAL_S3_ACCESS_KEY_ID")
+	defer os.Unsetenv("ADMIRAL_S3_SECRET_ACCESS_KEY")
 
 	cfg := &admiral.StorageConfig{
 		Endpoint:        "https://minio.example.com",
 		Region:          "us-east-1",
 		Bucket:          "backups",
 		Prefix:          "admiral",
-		AccessKeyEnv:    "TEST_ACCESS_KEY",
-		SecretKeyEnv:    "TEST_SECRET_KEY",
+		AccessKeyEnv:    "SHOULD_BE_IGNORED",
+		SecretKeyEnv:    "SHOULD_BE_IGNORED",
 		ForcePathStyle:  true,
 		SessionTokenEnv: "",
 	}
@@ -348,19 +348,48 @@ func TestNewS3FromConfigNil(t *testing.T) {
 }
 
 func TestNewS3FromConfigMissingAccessKey(t *testing.T) {
-	os.Unsetenv("MISSING_ACCESS_KEY")
+	os.Unsetenv("ADMIRAL_S3_ACCESS_KEY_ID")
+	os.Unsetenv("ADMIRAL_S3_SECRET_ACCESS_KEY")
 
 	cfg := &admiral.StorageConfig{
 		Endpoint:     "https://s3.example.com",
 		Region:       "us-east-1",
 		Bucket:       "b",
-		AccessKeyEnv: "MISSING_ACCESS_KEY",
-		SecretKeyEnv: "MISSING_SECRET_KEY",
+		AccessKeyEnv: "SOME_OTHER_VAR",
+		SecretKeyEnv: "SOME_OTHER_SECRET",
 	}
 
 	_, err := NewS3FromConfig(cfg)
 	if err == nil {
-		t.Fatal("expected error for missing env vars")
+		t.Fatal("expected error when ADMIRAL_S3_ACCESS_KEY_ID is not set")
+	}
+}
+
+func TestNewS3FromConfigIgnoresPayloadNames(t *testing.T) {
+	os.Setenv("ADMIRAL_S3_ACCESS_KEY_ID", "actual-key")
+	os.Setenv("ADMIRAL_S3_SECRET_ACCESS_KEY", "actual-secret")
+	os.Setenv("ADMIRAL_FLEET_TOKEN", "supersecret")
+	defer os.Unsetenv("ADMIRAL_S3_ACCESS_KEY_ID")
+	defer os.Unsetenv("ADMIRAL_S3_SECRET_ACCESS_KEY")
+	defer os.Unsetenv("ADMIRAL_FLEET_TOKEN")
+
+	cfg := &admiral.StorageConfig{
+		Endpoint:     "https://s3.example.com",
+		Region:       "us-east-1",
+		Bucket:       "b",
+		AccessKeyEnv: "ADMIRAL_FLEET_TOKEN",
+		SecretKeyEnv: "ADMIRAL_FLEET_TOKEN",
+	}
+
+	c, err := NewS3FromConfig(cfg)
+	if err != nil {
+		t.Fatalf("NewS3FromConfig: %v", err)
+	}
+	if c.accessKey != "actual-key" {
+		t.Fatalf("expected fixed ADMIRAL_S3_ACCESS_KEY_ID to be used, got %q", c.accessKey)
+	}
+	if c.secretKey != "actual-secret" {
+		t.Fatalf("expected fixed ADMIRAL_S3_SECRET_ACCESS_KEY to be used, got %q", c.secretKey)
 	}
 }
 
