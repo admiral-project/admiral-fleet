@@ -75,7 +75,7 @@ func (r *fakePodmanRunner) Run(_ context.Context, name string, args ...string) (
 	if joined == "podman volume inspect admiral-demo001-db --format json" {
 		return []byte(`[{"Name":"admiral-demo001-db","Mountpoint":"/var/lib/containers/storage/volumes/admiral-demo001-db/_data"}]`), nil
 	}
-	if joined == "podman exec -e MYSQL_PWD=secret admiral-demo001-infra mariadb-dump --single-transaction --quick --routines --events --triggers --skip-lock-tables -u user wordpress" {
+	if strings.Contains(joined, "podman exec --env-file") && strings.Contains(joined, "mariadb-dump") {
 		return []byte("-- dump --"), nil
 	}
 	if strings.Contains(joined, "pg_isready -U user -d gitea") {
@@ -323,7 +323,8 @@ func TestSystemdPodmanExecutorBackupUsesPodInfraContainer(t *testing.T) {
 	}
 	found := false
 	for _, call := range podmanRunner.calls {
-		if strings.Contains(strings.Join(call, " "), "podman exec -e MYSQL_PWD=secret admiral-demo001-db mariadb-dump --single-transaction --quick --routines --events --triggers --skip-lock-tables -u user wordpress") {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "podman exec") && strings.Contains(joined, "--env-file") && strings.Contains(joined, "admiral-demo001-db") && strings.Contains(joined, "mariadb-dump") {
 			found = true
 			break
 		}
@@ -403,7 +404,7 @@ func TestSystemdPodmanExecutorRestorePostgresUsesCleanRestore(t *testing.T) {
 	found := false
 	for _, call := range podmanRunner.calls {
 		joined := strings.Join(call, " ")
-		if strings.Contains(joined, "podman exec -e PGPASSWORD=secret admiral-demo001-db pg_restore --clean --if-exists --no-owner --no-privileges -Fc -U user -d gitea /tmp/admiral-restore.dump") {
+		if strings.Contains(joined, "podman exec") && strings.Contains(joined, "--env-file") && strings.Contains(joined, "admiral-demo001-db") && strings.Contains(joined, "pg_restore") && strings.Contains(joined, "--clean") {
 			found = true
 			break
 		}

@@ -142,10 +142,10 @@ func (i *Inspector) execWithInput(ctx context.Context, container string, env map
 		}
 		defer os.Remove(tmpEnv.Name())
 		if _, err := tmpEnv.WriteString(envContent.String()); err != nil {
-			tmpEnv.Close()
+			_ = tmpEnv.Close()
 			return nil, fmt.Errorf("write temp env file: %w", err)
 		}
-		tmpEnv.Close()
+		_ = tmpEnv.Close()
 		cmdArgs = append(cmdArgs, "--env-file", tmpEnv.Name())
 	}
 

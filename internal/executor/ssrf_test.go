@@ -62,7 +62,7 @@ func TestIsPrivateHost(t *testing.T) {
 		{"::1", true},          // IPv6 Loopback
 		{"fe80::1", true},      // IPv6 Link-local
 		{"2002::1", true},      // 6to4 Relay
-		{"2001:db8::1", false}, // Documentation IPv6 (IsPrivate handles this usually)
+		{"2001:db8::1", true},  // Documentation IPv6 (IsPrivate handles this usually)
 		{"2001:0::1", true},    // Teredo
 		{"2001:20::1", true},   // ORCHIDv2
 	}

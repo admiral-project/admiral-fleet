@@ -1,6 +1,6 @@
 module github.com/admiral-project/admiral/admiral-fleet
 
-go 1.21
+go 1.23
 
 replace github.com/admiral-project/admiral/admirald => ../admirald
 
