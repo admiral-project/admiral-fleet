@@ -65,6 +65,41 @@ func TestInspectorUsesPodmanArgumentArrays(t *testing.T) {
 	}
 }
 
+func TestExecWithEnvUsesEnvFile(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	env := map[string]string{"SECRET_VAR": "super-secret"}
+	if _, err := inspector.ExecWithEnv(context.Background(), "my-container", env, "ls"); err != nil {
+		t.Fatalf("exec with env: %v", err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(runner.calls))
+	}
+	call := runner.calls[0]
+	if call.name != "podman" {
+		t.Errorf("expected podman, got %s", call.name)
+	}
+
+	hasEnvFile := false
+	for i, arg := range call.args {
+		if arg == "--env-file" {
+			hasEnvFile = true
+			if i+1 >= len(call.args) {
+				t.Error("--env-file missing argument")
+			}
+		}
+		if arg == "-e" {
+			t.Error("-e flag should not be used for environment variables")
+		}
+	}
+	if !hasEnvFile {
+		t.Error("--env-file flag was not used")
+	}
+}
+
 func TestInspectorPodIsPaused(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)

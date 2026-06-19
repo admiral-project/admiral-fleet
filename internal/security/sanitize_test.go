@@ -23,6 +23,11 @@ func TestSanitize(t *testing.T) {
 		{"No secret", "ls -la /tmp", "ls -la /tmp"},
 		{"Short password flag", "mysql -u root -psecret", "mysql -u root -p[REDACTED]"},
 		{"Short password flag with space", "mysql -u root -p secret", "mysql -u root -p [REDACTED]"},
+		{"Long password flag", "mysql --password=secret", "mysql --password=[REDACTED]"},
+		{"Long password flag space", "mysql --password secret", "mysql --password [REDACTED]"},
+		{"Token flag", "app --token=secret", "app --token=[REDACTED]"},
+		{"S3 Secret Key", "S3_SECRET_KEY=mysecret", "S3_SECRET_KEY=[REDACTED]"},
+		{"DB Password", "DB_PASSWORD=pass123", "DB_PASSWORD=[REDACTED]"},
 	}
 
 	for _, tt := range tests {
@@ -30,6 +35,34 @@ func TestSanitize(t *testing.T) {
 			got := Sanitize(tt.input)
 			if got != tt.expected {
 				t.Errorf("Sanitize(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestValidateExecParams(t *testing.T) {
+	tests := []struct {
+		name    string
+		exe     string
+		args    []string
+		wantErr bool
+	}{
+		{"Safe", "ls", []string{"-la"}, false},
+		{"Shell injection ;", "ls", []string{"-la", ";", "rm", "-rf", "/"}, true},
+		{"Shell injection |", "ls", []string{"|", "grep", "foo"}, true},
+		{"Shell injection >", "ls", []string{">", "/tmp/out"}, true},
+		{"Shell injection <", "cat", []string{"<", "/etc/passwd"}, true},
+		{"Command substitution $()", "ls", []string{"$(id)"}, true},
+		{"Command substitution ``", "ls", []string{"`id`"}, true},
+		{"Path traversal ..", "cat", []string{"../../etc/passwd"}, true},
+		{"Safe name with path", "/usr/bin/ls", []string{"-la"}, true}, // ValidateExecParams forbids path separator in name
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateExecParams(tt.exe, tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateExecParams() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

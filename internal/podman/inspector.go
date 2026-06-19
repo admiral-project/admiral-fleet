@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
@@ -128,9 +129,26 @@ func (i *Inspector) execWithInput(ctx context.Context, container string, env map
 	if stdin != nil {
 		cmdArgs = append(cmdArgs, "-i")
 	}
-	for k, v := range env {
-		cmdArgs = append(cmdArgs, "-e", fmt.Sprintf("%s=%s", k, v))
+
+	if len(env) > 0 {
+		var envContent strings.Builder
+		for k, v := range env {
+			envContent.WriteString(fmt.Sprintf("%s=%s\n", k, v))
+		}
+		// Create a temporary environment file to avoid leaking secrets in ps
+		tmpEnv, err := os.CreateTemp("", "admiral-env-")
+		if err != nil {
+			return nil, fmt.Errorf("create temp env file: %w", err)
+		}
+		defer os.Remove(tmpEnv.Name())
+		if _, err := tmpEnv.WriteString(envContent.String()); err != nil {
+			tmpEnv.Close()
+			return nil, fmt.Errorf("write temp env file: %w", err)
+		}
+		tmpEnv.Close()
+		cmdArgs = append(cmdArgs, "--env-file", tmpEnv.Name())
 	}
+
 	cmdArgs = append(cmdArgs, container)
 	cmdArgs = append(cmdArgs, args...)
 	return i.runWithStdin(ctx, stdin, cmdArgs...)

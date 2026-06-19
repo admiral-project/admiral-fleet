@@ -198,6 +198,53 @@ func (e *SystemdPodmanExecutor) downloadS3Artifact(ctx context.Context, task adm
 	return path, nil
 }
 
+var isPrivateIP = func(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() {
+		return true
+	}
+	// Additional checks for specific ranges not fully covered by IsPrivate() in older Go versions
+	// or for more restrictive policy.
+	if ip4 := ip.To4(); ip4 != nil {
+		// CGNAT: 100.64.0.0/10
+		if ip4[0] == 100 && (ip4[1] >= 64 && ip4[1] <= 127) {
+			return true
+		}
+		// Documentation/Test networks
+		if ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 2 {
+			return true
+		} // 192.0.2.0/24
+		if ip4[0] == 198 && ip4[1] == 51 && ip4[2] == 100 {
+			return true
+		} // 198.51.100.0/24
+		if ip4[0] == 203 && ip4[1] == 0 && ip4[2] == 113 {
+			return true
+		} // 203.0.113.0/24
+		// 0.0.0.0/8
+		if ip4[0] == 0 {
+			return true
+		}
+	} else {
+		// IPv6 checks
+		// 6to4 Relay: 2002::/16
+		if ip[0] == 0x20 && ip[1] == 0x02 {
+			return true
+		}
+		// Teredo: 2001:0::/32
+		if ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x00 && ip[3] == 0x00 {
+			return true
+		}
+		// ORCHIDv2: 2001:20::/28
+		if ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x00 && (ip[3]&0xf0 == 0x20) {
+			return true
+		}
+		// Documentation: 2001:db8::/32
+		if ip[0] == 0x20 && ip[1] == 0x01 && ip[2] == 0x0d && ip[3] == 0xb8 {
+			return true
+		}
+	}
+	return false
+}
+
 func isPrivateHost(host string) error {
 	if host == "" {
 		return fmt.Errorf("empty host")
@@ -207,9 +254,10 @@ func isPrivateHost(host string) error {
 	if err != nil {
 		h = host
 	}
+
 	// Try direct IP parsing first
 	if ip := net.ParseIP(h); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+		if isPrivateIP(ip) {
 			return fmt.Errorf("refuse connection to private IP %q", ip)
 		}
 		return nil
@@ -224,7 +272,7 @@ func isPrivateHost(host string) error {
 		if ip == nil {
 			continue
 		}
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+		if isPrivateIP(ip) {
 			return fmt.Errorf("refuse connection to host %q resolving to private IP %q", h, ip)
 		}
 	}
