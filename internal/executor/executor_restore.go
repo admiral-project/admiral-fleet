@@ -203,9 +203,9 @@ func isRestrictedIP(ip net.IP) bool {
 		return true
 	}
 	restrictedCIDRs := []string{
-		"100.64.0.0/10",   // CGNAT
-		"192.0.2.0/24",    // Documentation (TEST-NET-1)
-		"2001:db8::/32",   // Documentation (IPv6)
+		"100.64.0.0/10", // CGNAT
+		"192.0.2.0/24",  // Documentation (TEST-NET-1)
+		"2001:db8::/32", // Documentation (IPv6)
 	}
 	for _, cidr := range restrictedCIDRs {
 		_, block, _ := net.ParseCIDR(cidr)
