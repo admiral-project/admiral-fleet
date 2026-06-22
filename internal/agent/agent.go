@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/executor"
