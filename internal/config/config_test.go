@@ -14,6 +14,7 @@ func TestLoadRequiresTLSURLs(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "http://127.0.0.1:8080")
 	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "postgres://queue:pass@localhost:5432/admiral_queue?sslmode=require")
+	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 	_, err := Load()
 	if err == nil {
@@ -28,6 +29,7 @@ func TestLoadAcceptsSecureURLs(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_QUADLET_DIR", "/tmp/test-quadlet")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
 	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "postgres://queue:pass@localhost:5432/admiral_queue?sslmode=require")
+	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 	cfg, err := Load()
 	if err != nil {
@@ -47,6 +49,7 @@ func TestLoadAcceptsSystemdPodmanExecutor(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
 	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "postgres://queue:pass@localhost:5432/admiral_queue?sslmode=require")
+	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 	setEnv(t, "ADMIRAL_FLEET_EXECUTOR", "systemd-podman")
 	setEnv(t, "ADMIRAL_FLEET_QUADLET_DIR", "/tmp/quadlet")
 	setEnv(t, "ADMIRAL_FLEET_DATA_DIR", "/tmp/data")
@@ -69,6 +72,7 @@ func TestLoadRejectsUnknownExecutor(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
 	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "postgres://queue:pass@localhost:5432/admiral_queue?sslmode=require")
+	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 	setEnv(t, "ADMIRAL_FLEET_EXECUTOR", "shell")
 
 	_, err := Load()
@@ -83,10 +87,25 @@ func TestLoadRequiresQueueDatabaseURL(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
 	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "")
+	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected error when queue database url is missing")
+	}
+}
+
+func TestLoadRequiresTaskPublicKey(t *testing.T) {
+	setEnv(t, "ADMIRAL_FLEET_NODE_ID", "node-1")
+	setEnv(t, "ADMIRAL_FLEET_TOKEN", "token")
+	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
+	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
+	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "postgres://queue:pass@localhost:5432/admiral_queue?sslmode=require")
+	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error when task public key is missing")
 	}
 }
 

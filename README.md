@@ -21,6 +21,7 @@ export ADMIRAL_FLEET_NODE_ID=node_001
 export ADMIRAL_FLEET_TOKEN=dev-token
 export ADMIRAL_API_URL=https://127.0.0.1:8080
 export ADMIRAL_QUEUE_DATABASE_URL=postgres://queue:password@127.0.0.1:5432/admiral_queue?sslmode=disable
+export ADMIRAL_TASK_PUBLIC_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 export ADMIRAL_FLEET_EXECUTOR=systemd-podman
 export ADMIRAL_FLEET_QUADLET_DIR=/etc/containers/systemd/admiral
 export ADMIRAL_FLEET_DATA_DIR=/var/lib/admiral

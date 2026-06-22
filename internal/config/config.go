@@ -75,6 +75,9 @@ func Load() (*Config, error) {
 	if cfg.QueueDatabaseURL == "" {
 		return nil, fmt.Errorf("ADMIRAL_QUEUE_DATABASE_URL is required")
 	}
+	if cfg.TaskPublicKey == "" {
+		return nil, fmt.Errorf("ADMIRAL_TASK_PUBLIC_KEY is required")
+	}
 	if err := tlsconfig.ValidateURLScheme(cfg.APIURL, "https"); err != nil {
 		return nil, fmt.Errorf("invalid ADMIRAL_API_URL: %w", err)
 	}
