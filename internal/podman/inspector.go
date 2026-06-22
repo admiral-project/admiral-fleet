@@ -145,7 +145,7 @@ func (i *Inspector) execWithInput(ctx context.Context, container string, env map
 
 		for k, v := range env {
 			if _, err := f.WriteString(fmt.Sprintf("%s=%s\n", k, v)); err != nil {
-				f.Close()
+				_ = f.Close()
 				return nil, fmt.Errorf("write temp env file: %w", err)
 			}
 		}

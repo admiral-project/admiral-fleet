@@ -44,7 +44,7 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 	if err := os.MkdirAll(r.QuadletDir, 0750); err != nil {
 		return fmt.Errorf("create quadlet dir: %w", err)
 	}
-	if err := os.Chmod(r.QuadletDir, 0755); err != nil {
+	if err := os.Chmod(r.QuadletDir, 0755); err != nil { // #nosec G302 -- Quadlet directory needs to be accessible by the rootless user
 		return fmt.Errorf("set quadlet dir mode: %w", err)
 	}
 
