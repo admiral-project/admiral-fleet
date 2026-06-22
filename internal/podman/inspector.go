@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
@@ -128,9 +129,32 @@ func (i *Inspector) execWithInput(ctx context.Context, container string, env map
 	if stdin != nil {
 		cmdArgs = append(cmdArgs, "-i")
 	}
-	for k, v := range env {
-		cmdArgs = append(cmdArgs, "-e", fmt.Sprintf("%s=%s", k, v))
+
+	var envFile string
+	if len(env) > 0 {
+		f, err := os.CreateTemp("", "admiral-env-")
+		if err != nil {
+			return nil, fmt.Errorf("create temp env file: %w", err)
+		}
+		envFile = f.Name()
+		defer os.Remove(envFile)
+
+		if err := f.Chmod(0600); err != nil {
+			return nil, fmt.Errorf("chmod temp env file: %w", err)
+		}
+
+		for k, v := range env {
+			if _, err := f.WriteString(fmt.Sprintf("%s=%s\n", k, v)); err != nil {
+				f.Close()
+				return nil, fmt.Errorf("write temp env file: %w", err)
+			}
+		}
+		if err := f.Close(); err != nil {
+			return nil, fmt.Errorf("close temp env file: %w", err)
+		}
+		cmdArgs = append(cmdArgs, "--env-file", envFile)
 	}
+
 	cmdArgs = append(cmdArgs, container)
 	cmdArgs = append(cmdArgs, args...)
 	return i.runWithStdin(ctx, stdin, cmdArgs...)

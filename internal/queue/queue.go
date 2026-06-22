@@ -47,6 +47,17 @@ type claimedCommand struct {
 }
 
 func NewConsumer(dbURL, nodeID string, publicKey ed25519.PublicKey, encryptionKey []byte) (*Consumer, error) {
+	// Security requirement: "no VPN assumption". Enforce secure transport for the
+	// durable task queue. We must reject insecure sslmode=disable or missing sslmode
+	// to protect against credential theft or task tampering in transit.
+	lowerURL := strings.ToLower(dbURL)
+	if strings.Contains(lowerURL, "sslmode=disable") {
+		return nil, fmt.Errorf("insecure ADMIRAL_QUEUE_DATABASE_URL: sslmode=disable is forbidden")
+	}
+	if !strings.Contains(lowerURL, "sslmode=") {
+		return nil, fmt.Errorf("insecure ADMIRAL_QUEUE_DATABASE_URL: sslmode must be explicitly set to a secure mode (require, verify-ca, or verify-full)")
+	}
+
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		return nil, fmt.Errorf("open queue database: %w", err)

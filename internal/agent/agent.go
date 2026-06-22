@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -62,6 +63,23 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 // consuming tasks so that admirald has an accurate view of running instances.
 func (a *Agent) Reconcile(ctx context.Context) {
 	a.checkAllPods(ctx)
+}
+
+// StartReconciler triggers Reconcile at a regular interval. This ensures
+// the control plane view stays in sync with the node even if some async
+// health reports are lost.
+func (a *Agent) StartReconciler(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.Reconcile(ctx)
+		}
+	}
 }
 
 func (a *Agent) HandleTask(task admiral.FleetTask) error {
@@ -121,6 +139,45 @@ func (a *Agent) StartOutboxFlusher(ctx context.Context, interval time.Duration) 
 		case <-time.After(interval):
 			_ = a.outbox.flush(a.send)
 		}
+	}
+}
+
+// StartBackupStorageWarner logs a visible warning periodically if no external
+// backup storage is configured. This ensures operators are aware that data
+// is only protected by local snapshots which may be lost with the node.
+func (a *Agent) StartBackupStorageWarner(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	// Initial check after some delay
+	go func() {
+		time.Sleep(1 * time.Minute)
+		a.warnIfNoBackupStorage()
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.warnIfNoBackupStorage()
+		}
+	}
+}
+
+func (a *Agent) warnIfNoBackupStorage() {
+	// Rootless check: Ensure we're not running as root.
+	if os.Getuid() == 0 {
+		slog.Error("SECURITY VIOLATION: admiral-fleet must not run as root. Rootless execution is required.")
+	}
+
+	// Backup storage check:
+	// Simple heuristic: if we don't have S3 credentials, we're likely only doing local backups.
+	accessKey := os.Getenv("ADMIRAL_S3_ACCESS_KEY_ID")
+	secretKey := os.Getenv("ADMIRAL_S3_SECRET_ACCESS_KEY")
+
+	if accessKey == "" || secretKey == "" {
+		slog.Warn("SECURITY WARNING: No remote backup storage (S3) configured. Backups are stored LOCALLY only and will be lost if this node fails.")
 	}
 }
 
