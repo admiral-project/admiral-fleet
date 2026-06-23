@@ -198,6 +198,24 @@ func (e *SystemdPodmanExecutor) downloadS3Artifact(ctx context.Context, task adm
 	return path, nil
 }
 
+func isRestrictedIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+		return true
+	}
+	restrictedCIDRs := []string{
+		"100.64.0.0/10", // CGNAT
+		"192.0.2.0/24",  // Documentation (TEST-NET-1)
+		"2001:db8::/32", // Documentation (IPv6)
+	}
+	for _, cidr := range restrictedCIDRs {
+		_, block, _ := net.ParseCIDR(cidr)
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func isPrivateHost(host string) error {
 	if host == "" {
 		return fmt.Errorf("empty host")
@@ -209,8 +227,8 @@ func isPrivateHost(host string) error {
 	}
 	// Try direct IP parsing first
 	if ip := net.ParseIP(h); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
-			return fmt.Errorf("refuse connection to private IP %q", ip)
+		if isRestrictedIP(ip) {
+			return fmt.Errorf("refuse connection to private or restricted IP %q", ip)
 		}
 		return nil
 	}
@@ -224,8 +242,8 @@ func isPrivateHost(host string) error {
 		if ip == nil {
 			continue
 		}
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
-			return fmt.Errorf("refuse connection to host %q resolving to private IP %q", h, ip)
+		if isRestrictedIP(ip) {
+			return fmt.Errorf("refuse connection to host %q resolving to private or restricted IP %q", h, ip)
 		}
 	}
 	return nil

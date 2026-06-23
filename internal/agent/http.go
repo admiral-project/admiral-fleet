@@ -37,13 +37,8 @@ func ipAllowed(addr string) bool {
 	if ip == nil {
 		return false
 	}
-	if ip.IsLoopback() {
-		return true
-	}
-	if strings.HasPrefix(ip.String(), "10.99.") {
-		return true
-	}
-	return false
+	// Without VPN, we only trust the local node.
+	return ip.IsLoopback()
 }
 
 func allowedHandler(h http.HandlerFunc) http.HandlerFunc {

@@ -83,10 +83,15 @@ func main() {
 	go fleetAgent.StartHeartbeatSender(context.Background())
 	go fleetAgent.StartStorageChecker(context.Background())
 	go fleetAgent.StartOutboxFlusher(context.Background(), 30*time.Second)
+	go fleetAgent.StartBackupStorageWarner(context.Background())
 
 	// Reconcile before consuming commands so the control plane has the
 	// current local instance view after worker restart.
 	fleetAgent.Reconcile(context.Background())
+
+	// Start periodic reconciler (every 1h) to ensure eventual consistency
+	// regardless of transient network failures in health callbacks.
+	go fleetAgent.StartReconciler(context.Background(), time.Hour)
 
 	consumer.ConsumeLoop(fleetAgent.HandleTask)
 }
