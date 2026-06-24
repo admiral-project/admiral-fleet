@@ -28,7 +28,15 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Logs = fmt.Sprintf("instance %s already provisioned (pod %q exists)", task.InstanceID, podName)
 		hostPorts := e.loadHostPorts(e.DataDir, task.InstanceID)
 		hostPortsJSON, _ := json.Marshal(hostPorts)
-		result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"provision_app","host_ports":%s}`, string(hostPortsJSON))
+		hasSetup := taskHasSetup(task)
+		if hasSetup && task.SetupCompleted {
+			hasSetupJSON := "true"
+			result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"provision_app","host_ports":%s,"has_setup":%s}`, string(hostPortsJSON), hasSetupJSON)
+		} else if hasSetup && e.setupMarkerExists(task.InstanceID) {
+			result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"provision_app","host_ports":%s,"has_setup":true}`, string(hostPortsJSON))
+		} else {
+			result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"provision_app","host_ports":%s}`, string(hostPortsJSON))
+		}
 		return result
 	}
 
@@ -111,10 +119,125 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 	}
 	hostPortsJSON, _ := json.Marshal(hostPorts)
 
+	// Execute setup_command for each service that declares one.
+	// These are one-time initialization commands run via podman exec
+	// after the containers are up. Setup runs after all services have
+	// started so dependencies are available (depends_on ordering).
+	//
+	// Setup idempotency has two layers:
+	//   1. task.SetupCompleted (populated by admirald from the DB
+	//      customer_apps.setup_completed column) is the authoritative
+	//      source of truth. If true, setup is always skipped.
+	//   2. A local marker file (setup_done) on the node guards against
+	//      lost-callback retries: if admirald never received the success
+	//      callback and re-dispatches the task with SetupCompleted=false,
+	//      the file prevents re-execution on the same node.
+	//
+	// The DB flag wins: if SetupCompleted=true we skip regardless of the
+	// file. If SetupCompleted=false but the file exists, we skip locally
+	// (the callback was lost). If both are false/absent we execute setup.
+	hasSetup := taskHasSetup(task)
+	if hasSetup && !task.SetupCompleted {
+		if markerExists := e.setupMarkerExists(task.InstanceID); markerExists {
+			hasSetup = true // already ran, report has_setup:true so admirald marks setup_completed
+		} else {
+			setupErr := e.runSetupCommands(ctx, task)
+			if setupErr != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("setup_command failed: %v", setupErr)
+				result.Logs = fmt.Sprintf("setup_command failed for instance %s: %v", task.InstanceID, setupErr)
+				result.Metadata = fmt.Sprintf(
+					`{"executor":"systemd-podman","action":"provision_app","host_ports":%s,"has_setup":true,"setup_failed":true,"setup_error":%q}`,
+					string(hostPortsJSON), setupErr.Error(),
+				)
+				return result
+			}
+			e.writeSetupMarker(task.InstanceID)
+		}
+	}
+	if task.SetupCompleted {
+		hasSetup = true
+	}
+
+	hasSetupJSON := "false"
+	if hasSetup {
+		hasSetupJSON = "true"
+	}
 	result.Success = true
 	result.Logs = fmt.Sprintf("provisioned instance %s", task.InstanceID)
-	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","action":"provision_app","host_ports":%s}`, string(hostPortsJSON))
+	result.Metadata = fmt.Sprintf(
+		`{"executor":"systemd-podman","action":"provision_app","host_ports":%s,"has_setup":%s}`,
+		string(hostPortsJSON), hasSetupJSON,
+	)
 	return result
+}
+
+// taskHasSetup returns true if any service in the task declares a
+// setup_command.
+func taskHasSetup(task admiral.FleetTask) bool {
+	for _, svc := range task.Services {
+		if strings.TrimSpace(svc.SetupCommand) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// setupMarkerPath returns the path to the local marker file that
+// indicates setup_command has already been executed on this node.
+func setupMarkerPath(dataDir, instanceID string) string {
+	return filepath.Join(dataDir, "instances", instanceID, "setup_done")
+}
+
+// setupMarkerExists returns true if the local setup_done marker file
+// exists for the given instance.
+func (e *SystemdPodmanExecutor) setupMarkerExists(instanceID string) bool {
+	if e.FS == nil {
+		return false
+	}
+	if _, err := e.FS.Stat(setupMarkerPath(e.DataDir, instanceID)); err != nil {
+		return false
+	}
+	return true
+}
+
+// writeSetupMarker writes the local setup_done marker file so that a
+// lost-callback retry does not re-execute setup_command on this node.
+func (e *SystemdPodmanExecutor) writeSetupMarker(instanceID string) {
+	dir := filepath.Join(e.DataDir, "instances", instanceID)
+	if err := e.FS.MkdirAll(dir, 0700); err != nil {
+		return
+	}
+	_ = e.FS.WriteFile(setupMarkerPath(e.DataDir, instanceID), []byte("done"), 0600)
+}
+
+// runSetupCommands executes the setup_command declared on each service
+// (if any) via podman exec inside the running container. Returns an
+// error if any setup command fails.
+//
+// Commands are executed with "sh -c" so the setup_command can use shell
+// features such as environment variable expansion ($VAR), redirection,
+// and quoting. The shell runs inside the container and the command
+// string comes from a trusted app definition (audited DB data), not from
+// end-user input.
+//
+// A generous timeout (10 minutes) is applied because setup commands
+// such as "bench new-site" for ERPNext can take several minutes to
+// complete.
+func (e *SystemdPodmanExecutor) runSetupCommands(ctx context.Context, task admiral.FleetTask) error {
+	for _, svc := range task.Services {
+		if strings.TrimSpace(svc.SetupCommand) == "" {
+			continue
+		}
+		container := containerName(task.InstanceID, svc.Name)
+		setupCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		out, err := e.podman().Exec(setupCtx, container, "sh", "-c", svc.SetupCommand)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("setup_command for service %q: %w: %s", svc.Name, err, string(out))
+		}
+	}
+	return nil
 }
 
 func validateProvisionTask(task admiral.FleetTask) error {
