@@ -52,6 +52,12 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 		return err
 	}
 
+	for _, shared := range SortedSharedVolumes(task.SharedVolumes) {
+		if err := writeFile(filepath.Join(r.QuadletDir, SharedVolumeFileName(task.InstanceID, shared.Name)), renderSharedVolume(task.InstanceID, shared.Name, r.wantedBy()), 0644); err != nil {
+			return err
+		}
+	}
+
 	for _, svc := range SortedServices(task.Services) {
 		if svc.Volume != "" {
 			if err := writeFile(filepath.Join(r.QuadletDir, VolumeFileName(task.InstanceID, svc.Name)), renderVolume(task.InstanceID, svc.Name, r.wantedBy()), 0644); err != nil {
@@ -99,6 +105,14 @@ func SortedServices(services []admiral.ServiceInfo) []admiral.ServiceInfo {
 	return out
 }
 
+func SortedSharedVolumes(volumes []admiral.SharedVolumeInfo) []admiral.SharedVolumeInfo {
+	out := append([]admiral.SharedVolumeInfo(nil), volumes...)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
 func PodFileName(instanceID string) string {
 	return fmt.Sprintf("admiral-%s.pod", SafeName(instanceID))
 }
@@ -111,6 +125,10 @@ func VolumeFileName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s.volume", SafeName(instanceID), SafeName(serviceName))
 }
 
+func SharedVolumeFileName(instanceID, volumeName string) string {
+	return fmt.Sprintf("admiral-%s-shared-%s.volume", SafeName(instanceID), SafeName(volumeName))
+}
+
 func PodUnitName(instanceID string) string {
 	return fmt.Sprintf("admiral-%s-pod.service", SafeName(instanceID))
 }
@@ -121,6 +139,10 @@ func ContainerUnitName(instanceID, serviceName string) string {
 
 func VolumeUnitName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s-volume.service", SafeName(instanceID), SafeName(serviceName))
+}
+
+func SharedVolumeUnitName(instanceID, volumeName string) string {
+	return fmt.Sprintf("admiral-%s-shared-%s-volume.service", SafeName(instanceID), SafeName(volumeName))
 }
 
 func SafeName(value string) string {
@@ -162,7 +184,13 @@ func (r *Renderer) renderPod(task admiral.FleetTask) string {
 
 func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, envPath string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral service %s for instance %s\n\n", svc.Name, instanceID)
+	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral service %s for instance %s\n", svc.Name, instanceID)
+	for _, dep := range svc.DependsOn {
+		unit := ContainerUnitName(instanceID, dep)
+		fmt.Fprintf(&b, "Wants=%s\n", unit)
+		fmt.Fprintf(&b, "After=%s\n", unit)
+	}
+	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\n", containerName(instanceID, svc.Name), sanitizeQuadletValue(svc.Image))
 	if svc.Command != "" {
 		fmt.Fprintf(&b, "Exec=%s\n", sanitizeQuadletValue(svc.Command))
@@ -172,6 +200,9 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	fmt.Fprintf(&b, "CgroupsMode=no-conmon\n")
 	if svc.Volume != "" {
 		fmt.Fprintf(&b, "Volume=%s:%s\n", VolumeFileName(instanceID, svc.Name), defaultVolumeTarget(svc))
+	}
+	for _, shared := range svc.SharedVolumes {
+		fmt.Fprintf(&b, "Volume=%s:%s\n", SharedVolumeFileName(instanceID, shared.Name), shared.Mount)
 	}
 	for _, line := range r.renderCredentialLines(instanceID, svc) {
 		fmt.Fprint(&b, line)
@@ -234,6 +265,13 @@ func renderVolume(instanceID, serviceName, target string) string {
 	return b.String()
 }
 
+func renderSharedVolume(instanceID, volumeName, target string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Volume]\nVolumeName=%s\n", sharedVolumeName(instanceID, volumeName))
+	fmt.Fprintf(&b, "\n[Install]\nWantedBy=%s\n", target)
+	return b.String()
+}
+
 func renderEnv(svc admiral.ServiceInfo) string {
 	keys := make([]string, 0, len(svc.Env))
 	values := make(map[string]string, len(svc.Env))
@@ -287,6 +325,10 @@ func containerName(instanceID, serviceName string) string {
 
 func volumeName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s", SafeName(instanceID), SafeName(serviceName))
+}
+
+func sharedVolumeName(instanceID, volumeName string) string {
+	return fmt.Sprintf("admiral-%s-shared-%s", SafeName(instanceID), SafeName(volumeName))
 }
 
 func defaultVolumeTarget(svc admiral.ServiceInfo) string {

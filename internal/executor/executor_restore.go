@@ -439,7 +439,8 @@ func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral
 	}
 
 	targetServices := e.servicesWithVolumes(task)
-	if len(targetServices) == 0 {
+	volumeTargets := e.volumeTargets(task)
+	if len(volumeTargets) == 0 {
 		return fmt.Errorf("no volume services found for restore")
 	}
 
@@ -453,8 +454,8 @@ func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral
 		}
 	}
 
-	for _, svc := range targetServices {
-		volName := volumeName(task.InstanceID, svc.Name)
+	for _, target := range volumeTargets {
+		volName := target.volumeName
 		inspect, err := e.podman().VolumeInspect(ctx, volName)
 		if err != nil {
 			return fmt.Errorf("inspect volume %q: %w", volName, err)
@@ -463,7 +464,7 @@ func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral
 		if mountpoint == "" {
 			return fmt.Errorf("volume %q has no mountpoint", volName)
 		}
-		prefix := svc.Name + "/"
+		prefix := target.archivePrefix + "/"
 		if err := e.extractGzipTarToDirFiltered(data, mountpoint, prefix); err != nil {
 			return fmt.Errorf("restore volume %q: %w", volName, err)
 		}

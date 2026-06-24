@@ -281,14 +281,14 @@ func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admir
 	tw := tar.NewWriter(w)
 	entryCount := 0
 
-	volumeServices := e.servicesWithVolumes(task)
-	if len(volumeServices) == 0 {
+	volumeTargets := e.volumeTargets(task)
+	if len(volumeTargets) == 0 {
 		// No services define volumes — nothing to archive, not an error.
 		return nil
 	}
 
-	for _, svc := range volumeServices {
-		volName := volumeName(task.InstanceID, svc.Name)
+	for _, target := range volumeTargets {
+		volName := target.volumeName
 		inspect, err := e.podman().VolumeInspect(ctx, volName)
 		if err != nil {
 			return fmt.Errorf("inspect volume %q: %w", volName, err)
@@ -297,7 +297,7 @@ func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admir
 		if mountpoint == "" {
 			return fmt.Errorf("volume %q has no mountpoint", volName)
 		}
-		prefix := svc.Name + "/"
+		prefix := target.archivePrefix + "/"
 		err = e.FS.Walk(mountpoint, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -351,11 +351,35 @@ func (e *SystemdPodmanExecutor) servicesWithVolumes(task admiral.FleetTask) []ad
 		if task.Backup != nil && task.Backup.Service != "" && svc.Name != task.Backup.Service {
 			continue
 		}
-		if svc.Volume != "" {
+		if svc.Volume != "" || len(svc.SharedVolumes) > 0 {
 			out = append(out, svc)
 		}
 	}
 	return out
+}
+
+type volumeArchiveTarget struct {
+	volumeName    string
+	archivePrefix string
+}
+
+func (e *SystemdPodmanExecutor) volumeTargets(task admiral.FleetTask) []volumeArchiveTarget {
+	targets := make([]volumeArchiveTarget, 0)
+	for _, svc := range e.servicesWithVolumes(task) {
+		if svc.Volume != "" {
+			targets = append(targets, volumeArchiveTarget{
+				volumeName:    volumeName(task.InstanceID, svc.Name),
+				archivePrefix: svc.Name,
+			})
+		}
+		for _, shared := range svc.SharedVolumes {
+			targets = append(targets, volumeArchiveTarget{
+				volumeName:    sharedVolumeName(task.InstanceID, shared.Name),
+				archivePrefix: svc.Name + "__shared__" + shared.Name,
+			})
+		}
+	}
+	return targets
 }
 
 func extractMountPoint(raw []byte) string {

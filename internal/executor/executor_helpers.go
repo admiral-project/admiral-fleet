@@ -164,6 +164,10 @@ func volumeName(instanceID, serviceName string) string {
 	return fmt.Sprintf("admiral-%s-%s", quadlet.SafeName(instanceID), quadlet.SafeName(serviceName))
 }
 
+func sharedVolumeName(instanceID, volumeName string) string {
+	return fmt.Sprintf("admiral-%s-shared-%s", quadlet.SafeName(instanceID), quadlet.SafeName(volumeName))
+}
+
 func podName(instanceID string) string {
 	return fmt.Sprintf("admiral-%s", quadlet.SafeName(instanceID))
 }

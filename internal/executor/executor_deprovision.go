@@ -33,6 +33,9 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 			_ = e.podman().RemoveVolume(ctx, vName)
 		}
 	}
+	for _, shared := range task.SharedVolumes {
+		_ = e.podman().RemoveVolume(ctx, sharedVolumeName(task.InstanceID, shared.Name))
+	}
 
 	// Remove Quadlet files
 	if err := e.renderer().Remove(task.InstanceID); err != nil {
@@ -73,6 +76,9 @@ func deprovisionUnitNames(task admiral.FleetTask) []string {
 		if svc.Volume != "" {
 			units = append(units, quadlet.VolumeUnitName(task.InstanceID, svc.Name))
 		}
+	}
+	for _, shared := range task.SharedVolumes {
+		units = append(units, quadlet.SharedVolumeUnitName(task.InstanceID, shared.Name))
 	}
 	return units
 }

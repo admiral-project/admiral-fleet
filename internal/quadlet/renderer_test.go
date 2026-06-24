@@ -144,6 +144,55 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	}
 }
 
+func TestRendererWritesSharedVolumesAndDependencies(t *testing.T) {
+	quadletDir := t.TempDir()
+	dataDir := t.TempDir()
+	renderer := NewRenderer(quadletDir, dataDir)
+
+	task := admiral.FleetTask{
+		InstanceID: "erp001",
+		Tier:       admiral.TierInfo{CPU: 2, Memory: "2GiB"},
+		SharedVolumes: []admiral.SharedVolumeInfo{
+			{Name: "sites", Mount: "/home/frappe/frappe-bench/sites", Services: []string{"backend", "worker"}},
+		},
+		Services: []admiral.ServiceInfo{
+			{
+				Name:      "backend",
+				Image:     "docker.io/frappe/erpnext:v15",
+				DependsOn: []string{"db", "redis"},
+				SharedVolumes: []admiral.ServiceSharedVolumeMount{
+					{Name: "sites", Mount: "/home/frappe/frappe-bench/sites"},
+				},
+			},
+			{Name: "db", Image: "docker.io/library/mariadb:10.11", Volume: "db"},
+			{Name: "redis", Image: "docker.io/library/redis:7"},
+		},
+	}
+
+	if err := renderer.Render(task); err != nil {
+		t.Fatalf("render quadlet with shared volumes: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-erp001-shared-sites.volume")); err != nil {
+		t.Fatalf("expected shared volume file: %v", err)
+	}
+
+	backendData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-erp001-backend.container"))
+	if err != nil {
+		t.Fatalf("read backend container: %v", err)
+	}
+	backend := string(backendData)
+	if !strings.Contains(backend, "Wants=admiral-erp001-db.service") {
+		t.Fatalf("expected Wants for db, got %q", backend)
+	}
+	if !strings.Contains(backend, "After=admiral-erp001-redis.service") {
+		t.Fatalf("expected After for redis, got %q", backend)
+	}
+	if !strings.Contains(backend, "Volume=admiral-erp001-shared-sites.volume:/home/frappe/frappe-bench/sites") {
+		t.Fatalf("expected shared volume mount, got %q", backend)
+	}
+}
+
 func TestRendererMakesQuadletDirTraversableForRootlessUser(t *testing.T) {
 	parent := t.TempDir()
 	quadletDir := filepath.Join(parent, "admiral")
