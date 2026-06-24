@@ -184,7 +184,7 @@ func portsFilePath(dataDir, instanceID string) string {
 // which is more secure than plaintext env files. The secrets must be created
 // before the Quadlet units are started, and cleaned up on deprovision.
 //
-// This replaces the previous approach using systemd-creds encrypt + 
+// This replaces the previous approach using systemd-creds encrypt +
 // LoadCredentialEncrypted, which was unsupported by systemd >=256
 // quadlet-generator and failed with "unsupported key" in [Container] or
 // "status 243/CREDENTIALS" when placed in [Service].

@@ -383,5 +383,3 @@ func defaultString(value, fallback string) string {
 	}
 	return value
 }
-
-
