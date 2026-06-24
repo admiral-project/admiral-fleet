@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/user"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,6 +60,151 @@ func TestInspectorUsesPodmanArgumentArrays(t *testing.T) {
 		{name: "podman", args: []string{"pod", "ps", "--format", "json"}},
 		{name: "podman", args: []string{"ps", "--format", "json"}},
 		{name: "podman", args: []string{"pod", "rm", "--force", "admiral-demo"}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestInspectorExecWithEnv(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	env := map[string]string{"KEY": "VALUE"}
+	if _, err := inspector.ExecWithEnv(context.Background(), "my-container", env, "ls"); err != nil {
+		t.Fatalf("exec with env: %v", err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(runner.calls))
+	}
+	call := runner.calls[0]
+	if call.name != "podman" {
+		t.Fatalf("expected podman, got %s", call.name)
+	}
+	// Check that --env-file is present
+	foundEnvFile := false
+	for i, arg := range call.args {
+		if arg == "--env-file" {
+			foundEnvFile = true
+			if i+1 >= len(call.args) {
+				t.Fatal("--env-file has no argument")
+			}
+			break
+		}
+	}
+	if !foundEnvFile {
+		t.Fatal("--env-file not found in podman exec args")
+	}
+}
+
+func TestInspectorExecWithStdin(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	stdin := strings.NewReader("input data")
+	if _, err := inspector.ExecWithStdin(context.Background(), "my-container", nil, stdin, "cat"); err != nil {
+		t.Fatalf("exec with stdin: %v", err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(runner.calls))
+	}
+	if runner.calls[0].args[0] != "exec" {
+		t.Fatalf("expected exec, got %s", runner.calls[0].args[0])
+	}
+	// Should have -i
+	foundI := false
+	for _, arg := range runner.calls[0].args {
+		if arg == "-i" {
+			foundI = true
+			break
+		}
+	}
+	if !foundI {
+		t.Fatal("-i not found in podman exec args")
+	}
+	if len(runner.stdin) != 1 || runner.stdin[0] != "input data" {
+		t.Fatalf("unexpected stdin: %v", runner.stdin)
+	}
+}
+
+func TestInspectorVolumeMethods(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	if _, err := inspector.VolumeInspect(context.Background(), "my-vol"); err != nil {
+		t.Fatalf("volume inspect: %v", err)
+	}
+	if err := inspector.RemoveVolume(context.Background(), "my-vol"); err != nil {
+		t.Fatalf("remove volume: %v", err)
+	}
+
+	expected := []call{
+		{name: "podman", args: []string{"volume", "inspect", "my-vol", "--format", "json"}},
+		{name: "podman", args: []string{"volume", "rm", "--force", "my-vol"}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestInspectorContainerMethods(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	if err := inspector.ContainerExists(context.Background(), "my-cont"); err != nil {
+		t.Fatalf("container exists: %v", err)
+	}
+	if _, err := inspector.ContainerInspect(context.Background(), "my-cont"); err != nil {
+		t.Fatalf("container inspect: %v", err)
+	}
+	if err := inspector.RemoveContainer(context.Background(), "my-cont"); err != nil {
+		t.Fatalf("remove container: %v", err)
+	}
+
+	expected := []call{
+		{name: "podman", args: []string{"container", "exists", "my-cont"}},
+		{name: "podman", args: []string{"container", "inspect", "my-cont", "--format", "json"}},
+		{name: "podman", args: []string{"rm", "--force", "my-cont"}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestInspectorPodPort(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	if _, err := inspector.PodPort(context.Background(), "my-pod", "80"); err != nil {
+		t.Fatalf("pod port: %v", err)
+	}
+
+	expected := []call{
+		{name: "podman", args: []string{"port", "my-pod", "80"}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestInspectorCopyToContainer(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	if _, err := inspector.CopyToContainer(context.Background(), "/src", "my-cont:/dst"); err != nil {
+		t.Fatalf("copy to container: %v", err)
+	}
+
+	expected := []call{
+		{name: "podman", args: []string{"cp", "/src", "my-cont:/dst"}},
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)

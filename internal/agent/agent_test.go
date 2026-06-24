@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -378,6 +379,32 @@ func TestExtractInstanceID(t *testing.T) {
 				t.Errorf("extractInstanceID(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestWarnIfNoBackupStorage(t *testing.T) {
+	ag := &Agent{}
+	// This should not panic
+	ag.warnIfNoBackupStorage()
+}
+
+func TestBuildHeartbeat(t *testing.T) {
+	ag := &Agent{
+		NodeID: "node-1",
+	}
+	hb := ag.buildHeartbeat(context.Background())
+	if hb.NodeID != "node-1" {
+		t.Errorf("expected node-1, got %q", hb.NodeID)
+	}
+	if hb.FleetVersion != FleetVersion {
+		t.Errorf("expected %q, got %q", FleetVersion, hb.FleetVersion)
+	}
+}
+
+func TestNewOutboxDefaultDir(t *testing.T) {
+	o := newOutbox("")
+	if !strings.HasSuffix(o.dir, "outbox") {
+		t.Errorf("unexpected default outbox dir: %q", o.dir)
 	}
 }
 

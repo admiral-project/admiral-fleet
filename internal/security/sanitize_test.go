@@ -50,3 +50,53 @@ func TestSanitizeArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRunArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr bool
+	}{
+		{"safe args", []string{"ls", "-la", "/tmp"}, false},
+		{"shell metacharacter ;", []string{"ls", ";", "rm"}, true},
+		{"shell metacharacter |", []string{"ls", "|", "grep"}, true},
+		{"shell metacharacter newline", []string{"ls", "\n", "rm"}, true},
+		{"command substitution $()", []string{"echo", "$(whoami)"}, true},
+		{"command substitution backticks", []string{"echo", "`whoami`"}, true},
+		{"path traversal", []string{"cat", "../../etc/passwd"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRunArgs(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateRunArgs() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateExecParams(t *testing.T) {
+	tests := []struct {
+		name    string
+		exe     string
+		args    []string
+		wantErr bool
+	}{
+		{"safe", "ls", []string{"-l"}, false},
+		{"empty exe", "", []string{"-l"}, true},
+		{"exe with path separator /", "/bin/ls", []string{"-l"}, true},
+		{"exe with path separator \\", "C:\\bin\\ls", []string{"-l"}, true},
+		{"arg with shell metacharacter", "ls", []string{"-l", ";"}, true},
+		{"arg with command substitution", "ls", []string{"$(whoami)"}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateExecParams(tt.exe, tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateExecParams() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

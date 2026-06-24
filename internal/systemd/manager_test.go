@@ -62,6 +62,74 @@ func TestManagerUsesSystemctlArgumentArrays(t *testing.T) {
 	}
 }
 
+func TestManagerStopRestartEnableDisable(t *testing.T) {
+	runner := &fakeRunner{}
+	manager := NewManager(runner)
+	manager.Timeout = time.Second
+
+	ctx := context.Background()
+	unit := "admiral-test.service"
+
+	if err := manager.Stop(ctx, unit); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if err := manager.Restart(ctx, unit); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if err := manager.Enable(ctx, unit); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if err := manager.Disable(ctx, unit); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+
+	expected := []call{
+		{name: "systemctl", args: []string{"stop", unit}},
+		{name: "systemctl", args: []string{"restart", unit}},
+		{name: "systemctl", args: []string{"enable", unit}},
+		{name: "systemctl", args: []string{"disable", unit}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestManagerResetFailed(t *testing.T) {
+	runner := &fakeRunner{}
+	manager := NewManager(runner)
+	manager.Timeout = time.Second
+
+	if err := manager.ResetFailed(context.Background()); err != nil {
+		t.Fatalf("reset-failed: %v", err)
+	}
+
+	expected := []call{
+		{name: "systemctl", args: []string{"reset-failed"}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestManagerRootlessStop(t *testing.T) {
+	runner := &fakeRunner{}
+	manager := NewManager(runner)
+	manager.Timeout = time.Second
+	manager.RunAsUser = "user1"
+
+	if err := manager.Stop(context.Background(), "unit1"); err != nil {
+		t.Fatalf("rootless stop: %v", err)
+	}
+
+	expected := []call{
+		{name: "loginctl", args: []string{"enable-linger", "user1"}},
+		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=user1@", "--user", "stop", "unit1"}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
 func TestManagerUsesSystemdRunForRootlessUserManager(t *testing.T) {
 	runner := &fakeRunner{}
 	manager := NewManager(runner)
