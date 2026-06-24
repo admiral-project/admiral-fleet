@@ -122,25 +122,23 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 		t.Fatalf("expected cgroups mode in container file, got %q", got)
 	}
 
-	// Verify secret credentials are rendered as LoadCredentialEncrypted= instead of env vars
+	// Verify secrets are referenced via Secret= (Quadlet native) instead of raw env vars
 	dbData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-demo001-db.container"))
 	if err != nil {
 		t.Fatalf("read db container: %v", err)
 	}
 	dbStr := string(dbData)
-	if !strings.Contains(dbStr, "LoadCredentialEncrypted=POSTGRES_PASSWORD:") {
-		t.Fatalf("expected LoadCredentialEncrypted=POSTGRES_PASSWORD in db container, got %q", dbStr)
+	if !strings.Contains(dbStr, "Secret=admiral-demo001-db-POSTGRES_PASSWORD,type=env,target=POSTGRES_PASSWORD") {
+		t.Fatalf("expected Secret= for POSTGRES_PASSWORD in db container, got %q", dbStr)
 	}
-	if !strings.Contains(dbStr, "LoadCredentialEncrypted=POSTGRES_USER:") {
-		t.Fatalf("expected LoadCredentialEncrypted=POSTGRES_USER in db container, got %q", dbStr)
+	if !strings.Contains(dbStr, "Secret=admiral-demo001-db-POSTGRES_USER,type=env,target=POSTGRES_USER") {
+		t.Fatalf("expected Secret= for POSTGRES_USER in db container, got %q", dbStr)
 	}
 	if strings.Contains(dbStr, "POSTGRES_PASSWORD=secret") {
 		t.Fatalf("secret should not appear in container file, got %q", dbStr)
 	}
-
-	// Verify cred path in LoadCredentialEncrypted references the correct file
-	if !strings.Contains(dbStr, CredFilePathPrefix(dataDir, "demo001", "db")) {
-		t.Fatalf("expected cred path prefix %q in db container, got %q", CredFilePathPrefix(dataDir, "demo001", "db"), dbStr)
+	if strings.Contains(dbStr, "LoadCredentialEncrypted") {
+		t.Fatalf("LoadCredentialEncrypted should not appear in container file, got %q", dbStr)
 	}
 }
 

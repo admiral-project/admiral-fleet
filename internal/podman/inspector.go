@@ -179,6 +179,26 @@ func (i *Inspector) RemoveVolume(ctx context.Context, name string) error {
 	return err
 }
 
+// SecretCreate creates a Podman secret with the given name and value.
+// The secret is stored encrypted in the Podman secret store for the
+// rootless user (or root if no RootlessUser is set).
+// Using --replace makes this idempotent: if the secret already exists,
+// it is replaced silently.
+func (i *Inspector) SecretCreate(ctx context.Context, name, value string) error {
+	_, err := i.runWithStdin(ctx, strings.NewReader(value), "secret", "create", "--replace", name, "-")
+	if err != nil {
+		return fmt.Errorf("create podman secret %q: %w", name, err)
+	}
+	return nil
+}
+
+// SecretRemove removes a Podman secret by name.
+// Errors are returned as-is (caller should ignore not-found if idempotency is desired).
+func (i *Inspector) SecretRemove(ctx context.Context, name string) error {
+	_, err := i.run(ctx, "secret", "rm", name)
+	return err
+}
+
 func (i *Inspector) PodPause(ctx context.Context, podName string) error {
 	_, err := i.run(ctx, "pod", "pause", podName)
 	return err

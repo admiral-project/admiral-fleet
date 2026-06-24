@@ -50,9 +50,9 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = fmt.Sprintf("chown instance data for %q: %v", task.InstanceID, err)
 		return result
 	}
-	if err := e.writeEncryptedSecrets(ctx, task); err != nil {
+	if err := e.createPodmanSecrets(ctx, task); err != nil {
 		result.Success = false
-		result.Error = fmt.Sprintf("write encrypted secrets for %q: %v", task.InstanceID, err)
+		result.Error = fmt.Sprintf("create podman secrets for %q: %v", task.InstanceID, err)
 		return result
 	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {

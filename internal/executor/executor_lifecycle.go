@@ -24,9 +24,9 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 		result.Error = fmt.Sprintf("chown instance data on start for %q: %v", task.InstanceID, err)
 		return result
 	}
-	if err := e.writeEncryptedSecrets(ctx, task); err != nil {
+	if err := e.createPodmanSecrets(ctx, task); err != nil {
 		result.Success = false
-		result.Error = fmt.Sprintf("write encrypted secrets on start for %q: %v", task.InstanceID, err)
+		result.Error = fmt.Sprintf("create podman secrets on start for %q: %v", task.InstanceID, err)
 		return result
 	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {

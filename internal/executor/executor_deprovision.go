@@ -37,6 +37,10 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 		_ = e.podman().RemoveVolume(ctx, sharedVolumeName(task.InstanceID, shared.Name))
 	}
 
+	// Remove Podman secrets before Quadlet files so the secret names
+	// are still known (they're derived from the task.Services, not from files).
+	e.removePodmanSecrets(ctx, task)
+
 	// Remove Quadlet files
 	if err := e.renderer().Remove(task.InstanceID); err != nil {
 		result.Success = false

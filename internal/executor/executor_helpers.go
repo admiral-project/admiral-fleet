@@ -175,26 +175,41 @@ func portsFilePath(dataDir, instanceID string) string {
 	return filepath.Join(dataDir, "instances", instanceID, "ports.json")
 }
 
-func (e *SystemdPodmanExecutor) writeEncryptedSecrets(ctx context.Context, task admiral.FleetTask) error {
-	dataDir := e.DataDir
-	if strings.TrimSpace(dataDir) == "" {
-		dataDir = "/var/lib/admiral"
-	}
-
+// createPodmanSecrets creates Podman secrets for each secret in the task's services.
+//
+// These secrets are consumed by Quadlet's Secret= directive in the [Container]
+// section, which injects them as environment variables into the container.
+//
+// Podman secrets are stored encrypted in the Podman secret store (per-user),
+// which is more secure than plaintext env files. The secrets must be created
+// before the Quadlet units are started, and cleaned up on deprovision.
+//
+// This replaces the previous approach using systemd-creds encrypt + 
+// LoadCredentialEncrypted, which was unsupported by systemd >=256
+// quadlet-generator and failed with "unsupported key" in [Container] or
+// "status 243/CREDENTIALS" when placed in [Service].
+func (e *SystemdPodmanExecutor) createPodmanSecrets(ctx context.Context, task admiral.FleetTask) error {
 	for _, svc := range task.Services {
 		if len(svc.Secrets) == 0 {
 			continue
 		}
-		credDir := quadlet.CredFilePathPrefix(dataDir, task.InstanceID, svc.Name)
-		if err := e.FS.MkdirAll(credDir, 0700); err != nil {
-			return fmt.Errorf("create cred dir for %q/%q: %w", task.InstanceID, svc.Name, err)
-		}
 		for k, v := range svc.Secrets {
-			path := credDir + "-" + quadlet.SafeName(k) + ".cred"
-			if err := systemd.EncryptCred(ctx, nil, k, strings.NewReader(v), path); err != nil {
-				return fmt.Errorf("encrypt secret %q for %q/%q: %w", k, task.InstanceID, svc.Name, err)
+			name := quadlet.SecretName(task.InstanceID, svc.Name, k)
+			if err := e.podman().SecretCreate(ctx, name, v); err != nil {
+				return fmt.Errorf("create podman secret for %q/%q/%q: %w", task.InstanceID, svc.Name, k, err)
 			}
 		}
 	}
 	return nil
+}
+
+// removePodmanSecrets removes Podman secrets for the given task's services.
+// This should be called during deprovision to clean up the secret store.
+func (e *SystemdPodmanExecutor) removePodmanSecrets(ctx context.Context, task admiral.FleetTask) {
+	for _, svc := range task.Services {
+		for k := range svc.Secrets {
+			name := quadlet.SecretName(task.InstanceID, svc.Name, k)
+			_ = e.podman().SecretRemove(ctx, name)
+		}
+	}
 }

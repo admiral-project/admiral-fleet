@@ -204,28 +204,49 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	for _, shared := range svc.SharedVolumes {
 		fmt.Fprintf(&b, "Volume=%s:%s\n", SharedVolumeFileName(instanceID, shared.Name), shared.Mount)
 	}
-	fmt.Fprintf(&b, "\n[Service]\nRestart=always\nTimeoutStartSec=900\n")
-	for _, line := range r.renderCredentialLines(instanceID, svc) {
+	for _, line := range r.renderSecretMounts(instanceID, svc) {
 		fmt.Fprint(&b, line)
 	}
-	fmt.Fprintf(&b, "\n[Install]\nWantedBy=%s\n", r.wantedBy())
+	fmt.Fprintf(&b, "\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=%s\n", r.wantedBy())
 	return b.String()
 }
 
-func (r *Renderer) renderCredentialLines(instanceID string, svc admiral.ServiceInfo) []string {
+// renderSecretMounts generates Secret= lines for the Quadlet [Container] section.
+//
+// Secret= is the standard Quadlet approach for injecting sensitive values as
+// environment variables into containers. Podman manages these secrets in its
+// internal secret store (encrypted at rest).
+//
+// This replaces the previous LoadCredentialEncrypted approach, which was never
+// a valid Quadlet key. systemd >=256 quadlet-generator rejects unknown keys in
+// [Container] with "unsupported key" error, preventing unit generation entirely.
+// Moving LoadCredentialEncrypted to [Service] avoided the unit error but broke
+// credential delivery: systemd handled the decryption but Podman never received
+// the credential, causing containers to fail with status 243/CREDENTIALS.
+//
+// With Secret=, Quadlet translates the directive to --secret in the generated
+// Podman command, so credentials arrive correctly in the container.
+//
+// Secrets must be created with 'podman secret create' before the Quadlet units
+// are started, and cleaned up on deprovision.
+func (r *Renderer) renderSecretMounts(instanceID string, svc admiral.ServiceInfo) []string {
 	keys := make([]string, 0, len(svc.Secrets))
 	for k := range svc.Secrets {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	credDir := CredFilePathPrefix(r.DataDir, instanceID, svc.Name)
 	lines := make([]string, 0, len(keys))
 	for _, k := range keys {
-		path := credDir + "-" + SafeName(k) + ".cred"
-		lines = append(lines, fmt.Sprintf("LoadCredentialEncrypted=%s:%s\n", k, path))
+		lines = append(lines, fmt.Sprintf("Secret=%s,type=env,target=%s\n", SecretName(instanceID, svc.Name, k), k))
 	}
 	return lines
+}
+
+// SecretName returns the Podman secret name for a given instance/service/key combination.
+// The name must be unique within the Podman secret store for the rootless user.
+func SecretName(instanceID, serviceName, key string) string {
+	return fmt.Sprintf("admiral-%s-%s-%s", SafeName(instanceID), SafeName(serviceName), SafeName(key))
 }
 
 func formatCPULimit(cpu float64) string {
@@ -363,6 +384,4 @@ func defaultString(value, fallback string) string {
 	return value
 }
 
-func CredFilePathPrefix(dataDir, instanceID, serviceName string) string {
-	return fmt.Sprintf("%s/instances/%s/creds/%s", strings.TrimRight(dataDir, "/"), instanceID, serviceName)
-}
+
