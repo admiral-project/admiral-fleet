@@ -204,10 +204,11 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	for _, shared := range svc.SharedVolumes {
 		fmt.Fprintf(&b, "Volume=%s:%s\n", SharedVolumeFileName(instanceID, shared.Name), shared.Mount)
 	}
+	fmt.Fprintf(&b, "\n[Service]\nRestart=always\nTimeoutStartSec=900\n")
 	for _, line := range r.renderCredentialLines(instanceID, svc) {
 		fmt.Fprint(&b, line)
 	}
-	fmt.Fprintf(&b, "\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=%s\n", r.wantedBy())
+	fmt.Fprintf(&b, "\n[Install]\nWantedBy=%s\n", r.wantedBy())
 	return b.String()
 }
 
