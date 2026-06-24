@@ -142,6 +142,16 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	if !strings.Contains(dbStr, CredFilePathPrefix(dataDir, "demo001", "db")) {
 		t.Fatalf("expected cred path prefix %q in db container, got %q", CredFilePathPrefix(dataDir, "demo001", "db"), dbStr)
 	}
+
+	// Remove
+	if err := renderer.Remove("demo001"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	for _, name := range expectedFiles {
+		if _, err := os.Stat(filepath.Join(quadletDir, name)); err == nil {
+			t.Fatalf("expected %s to be removed", name)
+		}
+	}
 }
 
 func TestRendererMakesQuadletDirTraversableForRootlessUser(t *testing.T) {
@@ -414,5 +424,53 @@ func TestSanitizeEnvValueAllowsNormalValue(t *testing.T) {
 	got := sanitizeEnvValue("POSTGRES_PASSWORD=supersecret")
 	if got != "POSTGRES_PASSWORD=supersecret" {
 		t.Fatalf("expected normal value unchanged, got %q", got)
+	}
+}
+
+func TestSortedServices(t *testing.T) {
+	svcs := []admiral.ServiceInfo{
+		{Name: "web"},
+		{Name: "db"},
+		{Name: "api"},
+	}
+	sorted := SortedServices(svcs)
+	if sorted[0].Name != "db" {
+		t.Errorf("expected db first, got %s", sorted[0].Name)
+	}
+	if sorted[1].Name != "api" {
+		t.Errorf("expected api second, got %s", sorted[1].Name)
+	}
+}
+
+func TestUnitNames(t *testing.T) {
+	if got := PodUnitName("inst"); got != "admiral-inst-pod.service" {
+		t.Errorf("PodUnitName: %s", got)
+	}
+	if got := ContainerUnitName("inst", "svc"); got != "admiral-inst-svc.service" {
+		t.Errorf("ContainerUnitName: %s", got)
+	}
+	if got := VolumeUnitName("inst", "svc"); got != "admiral-inst-svc-volume.service" {
+		t.Errorf("VolumeUnitName: %s", got)
+	}
+}
+
+func TestDefaultVolumeTarget(t *testing.T) {
+	tests := []struct {
+		image string
+		name  string
+		want  string
+	}{
+		{"postgres", "any", "/var/lib/postgresql/data"},
+		{"mariadb", "any", "/var/lib/mysql"},
+		{"mysql", "any", "/var/lib/mysql"},
+		{"wordpress", "any", "/var/www/html/wp-content"},
+		{"any", "db", "/var/lib/postgresql/data"},
+		{"any", "web", "/data"},
+	}
+	for _, tc := range tests {
+		got := defaultVolumeTarget(admiral.ServiceInfo{Image: tc.image, Name: tc.name})
+		if got != tc.want {
+			t.Errorf("defaultVolumeTarget(%s, %s) = %s, want %s", tc.image, tc.name, got, tc.want)
+		}
 	}
 }
