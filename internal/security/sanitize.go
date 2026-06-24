@@ -10,28 +10,15 @@ import (
 )
 
 var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)password=.*?\s`),
-	regexp.MustCompile(`(?i)MYSQL_PWD=.*?\s`),
-	regexp.MustCompile(`(?i)PGPASSWORD=.*?\s`),
-	regexp.MustCompile(`(?i)token=.*?\s`),
-	regexp.MustCompile(`(?i)secret=.*?\s`),
-	regexp.MustCompile(`(?i)apikey=.*?\s`),
-	regexp.MustCompile(`(?i)Authorization:.*?\s`),
-
-	// Terminating patterns (at the end of string)
-	regexp.MustCompile(`(?i)password=.*$`),
-	regexp.MustCompile(`(?i)MYSQL_PWD=.*$`),
-	regexp.MustCompile(`(?i)PGPASSWORD=.*$`),
-	regexp.MustCompile(`(?i)token=.*$`),
-	regexp.MustCompile(`(?i)secret=.*$`),
-	regexp.MustCompile(`(?i)apikey=.*$`),
-	regexp.MustCompile(`(?i)Authorization:.*$`),
-
-	// -p password
-	regexp.MustCompile(`(?i)-p\s.*?\s`),
-	regexp.MustCompile(`(?i)-p\s.*$`),
-	regexp.MustCompile(`(?i)-p[^\s].*?\s`),
-	regexp.MustCompile(`(?i)-p[^\s].*$`),
+	regexp.MustCompile(`(?i)password=[^\s;]*`),
+	regexp.MustCompile(`(?i)MYSQL_PWD=[^\s;]*`),
+	regexp.MustCompile(`(?i)PGPASSWORD=[^\s;]*`),
+	regexp.MustCompile(`(?i)token=[^\s;]*`),
+	regexp.MustCompile(`(?i)secret=[^\s;]*`),
+	regexp.MustCompile(`(?i)apikey=[^\s;]*`),
+	regexp.MustCompile(`(?i)Authorization:[^;]*`),
+	regexp.MustCompile(`(?i)-p\s+[^\s;]*`),
+	regexp.MustCompile(`(?i)-p[^\s;][^\s;]*`),
 }
 
 func Sanitize(text string) string {
@@ -39,33 +26,18 @@ func Sanitize(text string) string {
 		text = pattern.ReplaceAllStringFunc(text, func(match string) string {
 			if strings.Contains(match, "=") {
 				parts := strings.SplitN(match, "=", 2)
-				suffix := ""
-				if strings.HasSuffix(parts[1], " ") {
-					suffix = " "
-				}
-				return parts[0] + "=[REDACTED]" + suffix
+				return parts[0] + "=[REDACTED]"
 			}
 			if strings.Contains(match, ":") {
 				parts := strings.SplitN(match, ":", 2)
-				suffix := ""
-				if strings.HasSuffix(parts[1], " ") {
-					suffix = " "
-				}
-				return parts[0] + ": [REDACTED]" + suffix
+				return parts[0] + ": [REDACTED]"
 			}
-			if strings.HasPrefix(match, "-p ") {
-				suffix := ""
-				if strings.HasSuffix(match, " ") {
-					suffix = " "
-				}
-				return "-p [REDACTED]" + suffix
+			lower := strings.ToLower(match)
+			if strings.HasPrefix(lower, "-p ") {
+				return "-p [REDACTED]"
 			}
-			if strings.HasPrefix(match, "-p") {
-				suffix := ""
-				if strings.HasSuffix(match, " ") {
-					suffix = " "
-				}
-				return "-p[REDACTED]" + suffix
+			if strings.HasPrefix(lower, "-p") {
+				return "-p[REDACTED]"
 			}
 			return "[REDACTED]"
 		})

@@ -6,6 +6,9 @@ package systemd
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,6 +23,7 @@ type call struct {
 type fakeRunner struct {
 	calls     []call
 	responses map[string][]error
+	stdin     []string
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -34,6 +38,11 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 			}
 		}
 	}
+	return []byte("ok"), nil
+}
+
+func (r *fakeRunner) RunWithStdin(_ context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, call{name: name, args: append([]string(nil), args...)})
 	return []byte("ok"), nil
 }
 
@@ -132,5 +141,82 @@ func TestManagerRootlessDaemonReloadEnablesLingerOnce(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestManagerAllMethods(t *testing.T) {
+	runner := &fakeRunner{}
+	manager := NewManager(runner)
+	ctx := context.Background()
+
+	_ = manager.Stop(ctx, "unit")
+	_ = manager.Restart(ctx, "unit")
+	_ = manager.Enable(ctx, "unit")
+	_ = manager.Disable(ctx, "unit")
+	_ = manager.ResetFailed(ctx)
+
+	expected := []call{
+		{name: "systemctl", args: []string{"stop", "unit"}},
+		{name: "systemctl", args: []string{"restart", "unit"}},
+		{name: "systemctl", args: []string{"enable", "unit"}},
+		{name: "systemctl", args: []string{"disable", "unit"}},
+		{name: "systemctl", args: []string{"reset-failed"}},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestManagerRootlessReloadRetry(t *testing.T) {
+	runner := &fakeRunner{
+		responses: map[string][]error{
+			"systemd-run --wait --collect --working-directory=/tmp systemctl --machine=admiral-apps@ --user daemon-reload": {
+				errors.New("Connection reset by peer"), nil,
+			},
+		},
+	}
+	manager := NewManager(runner)
+	manager.RunAsUser = "admiral-apps"
+
+	if err := manager.DaemonReload(context.Background()); err != nil {
+		t.Fatalf("daemon-reload retry: %v", err)
+	}
+}
+
+func TestCommandRunner(t *testing.T) {
+	cr := CommandRunner{}
+	ctx := context.Background()
+	_, _ = cr.Run(ctx, "true")
+	_, _ = cr.RunWithStdin(ctx, strings.NewReader("hi"), "cat")
+}
+
+func TestEncryptCred(t *testing.T) {
+	runner := &fakeRunner{}
+	ctx := context.Background()
+	err := EncryptCred(ctx, runner, "name", strings.NewReader("secret"), "/tmp/out")
+	if err != nil {
+		t.Fatalf("EncryptCred: %v", err)
+	}
+}
+
+func TestRemoveCred(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cred")
+	_ = os.WriteFile(path, []byte("data"), 0600)
+	if err := RemoveCred(path); err != nil {
+		t.Fatalf("RemoveCred: %v", err)
+	}
+	if err := RemoveCred(path); err != nil {
+		t.Fatalf("RemoveCred (not exist): %v", err)
+	}
+}
+
+func TestCredPaths(t *testing.T) {
+	dir := CredDir("/var/lib/admiral", "inst")
+	if !strings.Contains(dir, "inst") {
+		t.Errorf("CredDir: %s", dir)
+	}
+	path := CredFilePath("/var/lib/admiral", "inst", "svc", "env")
+	if !strings.Contains(path, "svc-env") {
+		t.Errorf("CredFilePath: %s", path)
 	}
 }
