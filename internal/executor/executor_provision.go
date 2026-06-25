@@ -298,6 +298,24 @@ func (e *SystemdPodmanExecutor) waitForServiceReady(ctx context.Context, instanc
 		if err == nil && ready {
 			return nil
 		}
+		if err != nil {
+			slog.Error("serviceReadyCheck failed",
+				"instance", instanceID,
+				"service", svc.Name,
+				"container", container,
+				"attempt", retry+1,
+				"max_attempts", attempts,
+				"error", err,
+			)
+		} else if !ready {
+			slog.Warn("service not ready yet",
+				"instance", instanceID,
+				"service", svc.Name,
+				"container", container,
+				"attempt", retry+1,
+				"max_attempts", attempts,
+			)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -315,8 +333,14 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 	if err != nil {
 		return false, err
 	}
-	if !strings.Contains(strings.ToLower(string(inspect)), `"status":"running"`) {
-		return false, fmt.Errorf("container %q is not running yet", container)
+	status := extractContainerStatus(inspect)
+	if status != "running" {
+		slog.Error("container not running",
+			"instance", instanceID,
+			"container", container,
+			"status", status,
+		)
+		return false, fmt.Errorf("container %q is not running (status: %s)", container, status)
 	}
 	if svc.HealthCheck == nil {
 		return true, nil
@@ -380,6 +404,36 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 	default:
 		return false, fmt.Errorf("service %q healthcheck type %q is unsupported", svc.Name, svc.HealthCheck.Type)
 	}
+}
+
+func extractContainerStatus(inspect []byte) string {
+	// Try to extract the State.Status from the JSON output.
+	// podman container inspect returns an array of container objects.
+	var containers []struct {
+		State struct {
+			Status string `json:"Status"`
+		} `json:"State"`
+	}
+	if err := json.Unmarshal(inspect, &containers); err == nil && len(containers) > 0 {
+		return containers[0].State.Status
+	}
+	// Fallback: extract a quoted string after "status" in the raw JSON
+	raw := string(inspect)
+	idx := strings.Index(strings.ToLower(raw), `"status"`)
+	if idx >= 0 {
+		after := raw[idx+8:] // skip "status"
+		after = strings.TrimSpace(after)
+		if strings.HasPrefix(after, ":") {
+			after = strings.TrimSpace(after[1:])
+			if len(after) > 0 && after[0] == '"' {
+				end := strings.IndexByte(after[1:], '"')
+				if end >= 0 {
+					return after[1 : end+1]
+				}
+			}
+		}
+	}
+	return "unknown"
 }
 
 func validateProvisionTask(task admiral.FleetTask) error {

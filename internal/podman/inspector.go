@@ -136,8 +136,13 @@ func (i *Inspector) ExecTrustedShell(ctx context.Context, container, command str
 
 // RunTrustedInPod runs a one-off helper container inside an existing pod with
 // trusted arguments, inherited service mounts, and explicit environment.
-func (i *Inspector) RunTrustedInPod(ctx context.Context, pod, image string, env map[string]string, mounts []string, args ...string) ([]byte, error) {
+// If containerUser is non-empty, it is passed as --user to podman run.
+func (i *Inspector) RunTrustedInPod(ctx context.Context, pod, image string, env map[string]string, mounts []string, containerUser string, args ...string) ([]byte, error) {
 	cmdArgs := []string{"run", "--rm", "--pod", pod}
+
+	if containerUser != "" {
+		cmdArgs = append(cmdArgs, "--user", containerUser)
+	}
 
 	if len(env) > 0 {
 		keys := make([]string, 0, len(env))
@@ -166,8 +171,12 @@ func (i *Inspector) RunTrustedInPod(ctx context.Context, pod, image string, env 
 // --entrypoint "" to skip the image's entrypoint. This avoids triggering
 // heavy initialization (e.g. MariaDB db init) in one-shot helper containers
 // used for healthchecks.
-func (i *Inspector) RunTrustedInPodNoEntrypoint(ctx context.Context, pod, image string, env map[string]string, mounts []string, args ...string) ([]byte, error) {
+func (i *Inspector) RunTrustedInPodNoEntrypoint(ctx context.Context, pod, image string, env map[string]string, mounts []string, containerUser string, args ...string) ([]byte, error) {
 	cmdArgs := []string{"run", "--rm", "--pod", pod}
+
+	if containerUser != "" {
+		cmdArgs = append(cmdArgs, "--user", containerUser)
+	}
 
 	if len(env) > 0 {
 		keys := make([]string, 0, len(env))
@@ -193,8 +202,8 @@ func (i *Inspector) RunTrustedInPodNoEntrypoint(ctx context.Context, pod, image 
 	return i.runTrustedWithStdin(ctx, nil, cmdArgs...)
 }
 
-func (i *Inspector) RunTrustedShellInPod(ctx context.Context, pod, image string, env map[string]string, mounts []string, command string) ([]byte, error) {
-	return i.RunTrustedInPod(ctx, pod, image, env, mounts, "sh", "-c", command)
+func (i *Inspector) RunTrustedShellInPod(ctx context.Context, pod, image string, env map[string]string, mounts []string, containerUser string, command string) ([]byte, error) {
+	return i.RunTrustedInPod(ctx, pod, image, env, mounts, containerUser, "sh", "-c", command)
 }
 
 func (i *Inspector) execWithInput(ctx context.Context, container string, env map[string]string, stdin io.Reader, args ...string) ([]byte, error) {
