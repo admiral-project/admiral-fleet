@@ -190,6 +190,11 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 		fmt.Fprintf(&b, "Wants=%s\n", unit)
 		fmt.Fprintf(&b, "After=%s\n", unit)
 	}
+	for _, req := range svc.Requires {
+		unit := ContainerUnitName(instanceID, req)
+		fmt.Fprintf(&b, "Requires=%s\n", unit)
+		fmt.Fprintf(&b, "After=%s\n", unit)
+	}
 	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\n", containerName(instanceID, svc.Name), sanitizeQuadletValue(svc.Image))
 	if svc.Command != "" {

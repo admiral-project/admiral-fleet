@@ -61,6 +61,13 @@ func (r *fakePodmanRunner) Run(_ context.Context, name string, args ...string) (
 				break
 			}
 		}
+	} else if name == "runuser" {
+		for i, a := range args {
+			if a == "podman" {
+				call = args[i:]
+				break
+			}
+		}
 	}
 	joined := strings.Join(call, " ")
 	for _, o := range r.overrides {

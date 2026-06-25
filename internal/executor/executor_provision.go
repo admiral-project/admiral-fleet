@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -271,6 +272,12 @@ func (e *SystemdPodmanExecutor) waitForServiceReady(ctx context.Context, instanc
 			attempts = svc.HealthCheck.FailureThreshold
 		}
 	}
+	if svc.HealthCheckWaitSecs > 0 {
+		attempts = svc.HealthCheckWaitSecs / int(interval.Seconds())
+		if attempts < 1 {
+			attempts = 1
+		}
+	}
 
 	container := containerName(instanceID, svc.Name)
 	for retry := 0; retry < attempts; retry++ {
@@ -312,10 +319,13 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 		if len(svc.HealthCheck.Command) == 0 {
 			return false, fmt.Errorf("service %q command healthcheck requires command", svc.Name)
 		}
+		slog.Debug("running command healthcheck", "service", svc.Name, "instance", instanceID, "command", svc.HealthCheck.Command)
 		out, err := e.runServiceCommandNoEntrypoint(checkCtx, instanceID, svc, svc.HealthCheck.Command...)
 		if err != nil {
+			slog.Warn("command healthcheck failed", "service", svc.Name, "instance", instanceID, "error", err, "output", string(out))
 			return false, fmt.Errorf("service %q command healthcheck failed: %w: %s", svc.Name, err, string(out))
 		}
+		slog.Debug("command healthcheck succeeded", "service", svc.Name, "instance", instanceID)
 		return true, nil
 	case "tcp":
 		hostPort, ok := hostPorts[svc.Name]

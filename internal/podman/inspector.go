@@ -8,8 +8,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -383,13 +386,56 @@ func (i *Inspector) runTrustedWithStdin(ctx context.Context, stdin io.Reader, ar
 }
 
 func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
-	// Use systemd-run to execute podman inside the rootless user's systemd
-	// session. This ensures podman uses cgroup-manager=systemd, matching the
-	// cgroup manager used by Quadlet. Without a user systemd session, podman
-	// falls back to cgroup-manager=cgroupfs, which causes:
-	//   "systemd slice received as cgroup parent when using cgroupfs"
-	// when running one-shot containers with --pod (healthchecks) or
-	// podman exec on Quadlet-started containers.
+	u, err := user.Lookup(i.RootlessUser)
+	if err != nil {
+		return nil, fmt.Errorf("lookup rootless user %q: %w", i.RootlessUser, err)
+	}
+	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
+
+	// Detect if this is an exec operation that needs the user's systemd
+	// session for cgroup access. Quadlet containers use systemd cgroup
+	// manager; running podman exec via runuser falls back to cgroupfs
+	// and fails with "systemd slice received as cgroup parent when
+	// using cgroupfs".
+	if len(args) > 0 && args[0] == "exec" {
+		return i.runAsUserSystemdSession(ctx, stdin, args...)
+	}
+
+	// Use runuser to run podman as the rootless user, with XDG_RUNTIME_DIR set
+	// so podman can find the user's runtime directory (rootless containers).
+	// This path is safe for commands that don't interact with Quadlet cgroups
+	// (e.g. podman secret create, podman pod exists, podman container exists).
+
+	// We MUST NOT sanitize here, because this is the WRAPPER.
+	// The ACTUAL runner (CommandRunner) will sanitize the final arguments.
+	runuserArgs := append([]string{"-u", i.RootlessUser, "--", "env", "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
+
+	runner := i.Runner
+	if runner == nil {
+		runner = CommandRunner{}
+	}
+	cr, ok := runner.(*CommandRunner)
+	if ok {
+		return cr.runWithStdin(ctx, stdin, "runuser", runuserArgs...)
+	}
+	if stdin != nil {
+		if runnerWithStdin, ok := runner.(stdinRunner); ok {
+			return runnerWithStdin.RunWithStdin(ctx, stdin, "runuser", runuserArgs...)
+		}
+		return nil, fmt.Errorf("runner %T does not support stdin", runner)
+	}
+	return runner.Run(ctx, "runuser", runuserArgs...)
+}
+
+// runAsUserSystemdSession runs podman inside the rootless user's systemd
+// session via systemd-run --machine. It first ensures systemd-machined is
+// running so the --machine transport can resolve the user@ target.
+func (i *Inspector) runAsUserSystemdSession(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+	// Ensure systemd-machined is active (it is D-Bus activated but may not
+	// have been running when the user session started, which prevents
+	// --machine=user@ from resolving).
+	_ = exec.CommandContext(ctx, "systemctl", "start", "systemd-machined").Run()
+
 	sdrunArgs := append([]string{
 		"--machine", i.RootlessUser + "@",
 		"--user",
@@ -399,6 +445,10 @@ func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, arg
 		"--",
 		"podman",
 	}, args...)
+	slog.Debug("running podman via user systemd session",
+		"user", i.RootlessUser,
+		"args", args,
+	)
 
 	runner := i.Runner
 	if runner == nil {
@@ -418,6 +468,9 @@ func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, arg
 }
 
 func (i *Inspector) runAsUserWithStdinTrusted(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+	// Ensure systemd-machined is active so --machine=user@ resolves.
+	_ = exec.CommandContext(ctx, "systemctl", "start", "systemd-machined").Run()
+
 	sdrunArgs := append([]string{
 		"--machine", i.RootlessUser + "@",
 		"--user",
@@ -427,6 +480,10 @@ func (i *Inspector) runAsUserWithStdinTrusted(ctx context.Context, stdin io.Read
 		"--",
 		"podman",
 	}, args...)
+	slog.Debug("running trusted podman via user systemd session",
+		"user", i.RootlessUser,
+		"args", args,
+	)
 
 	runner := i.Runner
 	if runner != nil {
