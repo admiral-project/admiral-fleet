@@ -6,6 +6,7 @@ package systemd
 import (
 	"context"
 	"errors"
+	"os/user"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,6 +16,10 @@ import (
 type call struct {
 	name string
 	args []string
+}
+
+func testLookupUser(username string) (*user.User, error) {
+	return &user.User{Uid: "1001", Username: username}, nil
 }
 
 type fakeRunner struct {
@@ -116,6 +121,7 @@ func TestManagerRootlessStop(t *testing.T) {
 	manager := NewManager(runner)
 	manager.Timeout = time.Second
 	manager.RunAsUser = "user1"
+	manager.lookupUser = testLookupUser
 
 	if err := manager.Stop(context.Background(), "unit1"); err != nil {
 		t.Fatalf("rootless stop: %v", err)
@@ -123,18 +129,19 @@ func TestManagerRootlessStop(t *testing.T) {
 
 	expected := []call{
 		{name: "loginctl", args: []string{"enable-linger", "user1"}},
-		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=user1@", "--user", "stop", "unit1"}},
+		{name: "runuser", args: []string{"-u", "user1", "--", "env", "XDG_RUNTIME_DIR=/run/user/1001", "systemctl", "--user", "stop", "unit1"}},
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
 	}
 }
 
-func TestManagerUsesSystemdRunForRootlessUserManager(t *testing.T) {
+func TestManagerUsesRunuserForRootlessUserManager(t *testing.T) {
 	runner := &fakeRunner{}
 	manager := NewManager(runner)
 	manager.Timeout = time.Second
 	manager.RunAsUser = "admiral-apps"
+	manager.lookupUser = testLookupUser
 
 	if err := manager.DaemonReload(context.Background()); err != nil {
 		t.Fatalf("daemon-reload: %v", err)
@@ -145,9 +152,9 @@ func TestManagerUsesSystemdRunForRootlessUserManager(t *testing.T) {
 
 	expected := []call{
 		{name: "loginctl", args: []string{"enable-linger", "admiral-apps"}},
-		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=admiral-apps@", "--user", "daemon-reload"}},
+		{name: "runuser", args: []string{"-u", "admiral-apps", "--", "env", "XDG_RUNTIME_DIR=/run/user/1001", "systemctl", "--user", "daemon-reload"}},
 		{name: "loginctl", args: []string{"enable-linger", "admiral-apps"}},
-		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=admiral-apps@", "--user", "start", "admiral-demo-app.service"}},
+		{name: "runuser", args: []string{"-u", "admiral-apps", "--", "env", "XDG_RUNTIME_DIR=/run/user/1001", "systemctl", "--user", "start", "admiral-demo-app.service"}},
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
@@ -157,7 +164,7 @@ func TestManagerUsesSystemdRunForRootlessUserManager(t *testing.T) {
 func TestManagerRootlessStartRetriesAfterMissingUnit(t *testing.T) {
 	runner := &fakeRunner{
 		responses: map[string][]error{
-			"systemd-run --wait --collect --working-directory=/tmp systemctl --machine=admiral-apps@ --user start admiral-demo-app.service": {
+			"runuser -u admiral-apps -- env XDG_RUNTIME_DIR=/run/user/1001 systemctl --user start admiral-demo-app.service": {
 				errors.New("status=5/NOTINSTALLED"), nil,
 			},
 		},
@@ -165,6 +172,7 @@ func TestManagerRootlessStartRetriesAfterMissingUnit(t *testing.T) {
 	manager := NewManager(runner)
 	manager.Timeout = time.Second
 	manager.RunAsUser = "admiral-apps"
+	manager.lookupUser = testLookupUser
 
 	err := manager.Start(context.Background(), "admiral-demo-app.service")
 	if err != nil {
@@ -173,11 +181,11 @@ func TestManagerRootlessStartRetriesAfterMissingUnit(t *testing.T) {
 
 	expected := []call{
 		{name: "loginctl", args: []string{"enable-linger", "admiral-apps"}},
-		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=admiral-apps@", "--user", "start", "admiral-demo-app.service"}},
+		{name: "runuser", args: []string{"-u", "admiral-apps", "--", "env", "XDG_RUNTIME_DIR=/run/user/1001", "systemctl", "--user", "start", "admiral-demo-app.service"}},
 		{name: "loginctl", args: []string{"enable-linger", "admiral-apps"}},
-		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=admiral-apps@", "--user", "daemon-reload"}},
+		{name: "runuser", args: []string{"-u", "admiral-apps", "--", "env", "XDG_RUNTIME_DIR=/run/user/1001", "systemctl", "--user", "daemon-reload"}},
 		{name: "loginctl", args: []string{"enable-linger", "admiral-apps"}},
-		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=admiral-apps@", "--user", "start", "admiral-demo-app.service"}},
+		{name: "runuser", args: []string{"-u", "admiral-apps", "--", "env", "XDG_RUNTIME_DIR=/run/user/1001", "systemctl", "--user", "start", "admiral-demo-app.service"}},
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
@@ -189,6 +197,7 @@ func TestManagerRootlessDaemonReloadEnablesLingerOnce(t *testing.T) {
 	manager := NewManager(runner)
 	manager.Timeout = time.Second
 	manager.RunAsUser = "admiral-apps"
+	manager.lookupUser = testLookupUser
 
 	if err := manager.DaemonReload(context.Background()); err != nil {
 		t.Fatalf("daemon-reload: %v", err)
@@ -196,7 +205,7 @@ func TestManagerRootlessDaemonReloadEnablesLingerOnce(t *testing.T) {
 
 	expected := []call{
 		{name: "loginctl", args: []string{"enable-linger", "admiral-apps"}},
-		{name: "systemd-run", args: []string{"--wait", "--collect", "--working-directory=/tmp", "systemctl", "--machine=admiral-apps@", "--user", "daemon-reload"}},
+		{name: "runuser", args: []string{"-u", "admiral-apps", "--", "env", "XDG_RUNTIME_DIR=/run/user/1001", "systemctl", "--user", "daemon-reload"}},
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
