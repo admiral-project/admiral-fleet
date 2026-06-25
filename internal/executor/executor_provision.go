@@ -312,7 +312,7 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 		if len(svc.HealthCheck.Command) == 0 {
 			return false, fmt.Errorf("service %q command healthcheck requires command", svc.Name)
 		}
-		out, err := e.runServiceCommand(checkCtx, instanceID, svc, svc.HealthCheck.Command...)
+		out, err := e.runServiceCommandNoEntrypoint(checkCtx, instanceID, svc, svc.HealthCheck.Command...)
 		if err != nil {
 			return false, fmt.Errorf("service %q command healthcheck failed: %w: %s", svc.Name, err, string(out))
 		}

@@ -214,6 +214,10 @@ func (e *SystemdPodmanExecutor) runServiceCommand(ctx context.Context, instanceI
 	return e.podman().RunTrustedInPod(ctx, podName(instanceID), svc.Image, serviceRuntimeEnv(svc), serviceRuntimeMounts(instanceID, svc), args...)
 }
 
+func (e *SystemdPodmanExecutor) runServiceCommandNoEntrypoint(ctx context.Context, instanceID string, svc admiral.ServiceInfo, args ...string) ([]byte, error) {
+	return e.podman().RunTrustedInPodNoEntrypoint(ctx, podName(instanceID), svc.Image, serviceRuntimeEnv(svc), serviceRuntimeMounts(instanceID, svc), args...)
+}
+
 func (e *SystemdPodmanExecutor) runServiceCommandTrustedShell(ctx context.Context, instanceID string, svc admiral.ServiceInfo, command string) ([]byte, error) {
 	return e.podman().RunTrustedShellInPod(ctx, podName(instanceID), svc.Image, serviceRuntimeEnv(svc), serviceRuntimeMounts(instanceID, svc), command)
 }

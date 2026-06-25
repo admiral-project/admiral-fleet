@@ -10,8 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/user"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -156,6 +154,37 @@ func (i *Inspector) RunTrustedInPod(ctx context.Context, pod, image string, env 
 		cmdArgs = append(cmdArgs, "-v", mount)
 	}
 
+	cmdArgs = append(cmdArgs, image)
+	cmdArgs = append(cmdArgs, args...)
+	return i.runTrustedWithStdin(ctx, nil, cmdArgs...)
+}
+
+// RunTrustedInPodNoEntrypoint is like RunTrustedInPod but passes
+// --entrypoint "" to skip the image's entrypoint. This avoids triggering
+// heavy initialization (e.g. MariaDB db init) in one-shot helper containers
+// used for healthchecks.
+func (i *Inspector) RunTrustedInPodNoEntrypoint(ctx context.Context, pod, image string, env map[string]string, mounts []string, args ...string) ([]byte, error) {
+	cmdArgs := []string{"run", "--rm", "--pod", pod}
+
+	if len(env) > 0 {
+		keys := make([]string, 0, len(env))
+		for key := range env {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			cmdArgs = append(cmdArgs, "--env", fmt.Sprintf("%s=%s", key, env[key]))
+		}
+	}
+
+	for _, mount := range mounts {
+		if strings.TrimSpace(mount) == "" {
+			continue
+		}
+		cmdArgs = append(cmdArgs, "-v", mount)
+	}
+
+	cmdArgs = append(cmdArgs, "--entrypoint", "")
 	cmdArgs = append(cmdArgs, image)
 	cmdArgs = append(cmdArgs, args...)
 	return i.runTrustedWithStdin(ctx, nil, cmdArgs...)
@@ -354,17 +383,22 @@ func (i *Inspector) runTrustedWithStdin(ctx context.Context, stdin io.Reader, ar
 }
 
 func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
-	u, err := user.Lookup(i.RootlessUser)
-	if err != nil {
-		return nil, fmt.Errorf("lookup rootless user %q: %w", i.RootlessUser, err)
-	}
-	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
-	// Use runuser to run podman as the rootless user, with XDG_RUNTIME_DIR set
-	// so podman can find the user's runtime directory (rootless containers).
-
-	// We MUST NOT sanitize here, because this is the WRAPPER.
-	// The ACTUAL runner (CommandRunner) will sanitize the final arguments.
-	runuserArgs := append([]string{"-u", i.RootlessUser, "--", "env", "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
+	// Use systemd-run to execute podman inside the rootless user's systemd
+	// session. This ensures podman uses cgroup-manager=systemd, matching the
+	// cgroup manager used by Quadlet. Without a user systemd session, podman
+	// falls back to cgroup-manager=cgroupfs, which causes:
+	//   "systemd slice received as cgroup parent when using cgroupfs"
+	// when running one-shot containers with --pod (healthchecks) or
+	// podman exec on Quadlet-started containers.
+	sdrunArgs := append([]string{
+		"--machine", i.RootlessUser + "@",
+		"--user",
+		"--wait",
+		"--collect",
+		"--pipe",
+		"--",
+		"podman",
+	}, args...)
 
 	runner := i.Runner
 	if runner == nil {
@@ -372,37 +406,40 @@ func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, arg
 	}
 	cr, ok := runner.(*CommandRunner)
 	if ok {
-		return cr.runWithStdin(ctx, stdin, "runuser", runuserArgs...)
+		return cr.runWithStdin(ctx, stdin, "systemd-run", sdrunArgs...)
 	}
 	if stdin != nil {
 		if runnerWithStdin, ok := runner.(stdinRunner); ok {
-			return runnerWithStdin.RunWithStdin(ctx, stdin, "runuser", runuserArgs...)
+			return runnerWithStdin.RunWithStdin(ctx, stdin, "systemd-run", sdrunArgs...)
 		}
 		return nil, fmt.Errorf("runner %T does not support stdin", runner)
 	}
-	return runner.Run(ctx, "runuser", runuserArgs...)
+	return runner.Run(ctx, "systemd-run", sdrunArgs...)
 }
 
 func (i *Inspector) runAsUserWithStdinTrusted(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
-	u, err := user.Lookup(i.RootlessUser)
-	if err != nil {
-		return nil, fmt.Errorf("lookup rootless user %q: %w", i.RootlessUser, err)
-	}
-	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
-	runuserArgs := append([]string{"-u", i.RootlessUser, "--", "env", "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
+	sdrunArgs := append([]string{
+		"--machine", i.RootlessUser + "@",
+		"--user",
+		"--wait",
+		"--collect",
+		"--pipe",
+		"--",
+		"podman",
+	}, args...)
 
 	runner := i.Runner
 	if runner != nil {
 		if stdin != nil {
 			if runnerWithStdin, ok := runner.(stdinRunner); ok {
-				return runnerWithStdin.RunWithStdin(ctx, stdin, "runuser", runuserArgs...)
+				return runnerWithStdin.RunWithStdin(ctx, stdin, "systemd-run", sdrunArgs...)
 			}
 			return nil, fmt.Errorf("runner %T does not support stdin", runner)
 		}
-		return runner.Run(ctx, "runuser", runuserArgs...)
+		return runner.Run(ctx, "systemd-run", sdrunArgs...)
 	}
 
-	return trustedCommand(ctx, stdin, "runuser", runuserArgs...)
+	return trustedCommand(ctx, stdin, "systemd-run", sdrunArgs...)
 }
 
 func trustedCommand(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {

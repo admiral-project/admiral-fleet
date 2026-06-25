@@ -25,6 +25,15 @@ type setupRacePodmanRunner struct {
 func (r *setupRacePodmanRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := append([]string{name}, args...)
 	r.calls = append(r.calls, call)
+	// Unwrap systemd-run wrapper for simpler matching.
+	if name == "systemd-run" {
+		for i, a := range args {
+			if a == "--" && i+1 < len(args) && args[i+1] == "podman" {
+				call = args[i+1:]
+				break
+			}
+		}
+	}
 	joined := strings.Join(call, " ")
 
 	switch {
@@ -44,10 +53,12 @@ func (r *setupRacePodmanRunner) Run(_ context.Context, name string, args ...stri
 	case strings.Contains(joined, "podman container inspect admiral-racedemo-backend --format json"):
 		return []byte(`[{"State":{"Status":"running"}}]`), nil
 	case strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&
-		strings.Contains(joined, "example.com/db:1 healthcheck"):
+		strings.Contains(joined, "example.com/db:1") &&
+		strings.Contains(joined, "healthcheck"):
 		return []byte("ok"), nil
 	case strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&
-		strings.Contains(joined, "example.com/app:1 app healthcheck"):
+		strings.Contains(joined, "example.com/app:1") &&
+		strings.Contains(joined, "healthcheck"):
 		return []byte("ok"), nil
 	case strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&
 		strings.Contains(joined, "example.com/app:1 sh -c app bootstrap"):
@@ -357,7 +368,8 @@ func TestProvisionSetupCommandWaitsForDependenciesToBeReady(t *testing.T) {
 	for _, call := range podmanRunner.calls {
 		joined := strings.Join(call, " ")
 		if strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&
-			strings.Contains(joined, "example.com/db:1 healthcheck") {
+			strings.Contains(joined, "example.com/db:1") &&
+			strings.Contains(joined, "healthcheck") {
 			foundDependencyCheck = true
 		}
 		if strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&

@@ -306,7 +306,7 @@ func TestInspectorUsesRunuserForRootlessPodman(t *testing.T) {
 	}
 
 	expected := []call{
-		{name: "runuser", args: []string{"-u", currentUser.Username, "--", "env", "XDG_RUNTIME_DIR=/run/user/" + currentUser.Uid, "podman", "pod", "exists", "admiral-demo"}},
+		{name: "systemd-run", args: []string{"--machine", currentUser.Username + "@", "--user", "--wait", "--collect", "--pipe", "--", "podman", "pod", "exists", "admiral-demo"}},
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)

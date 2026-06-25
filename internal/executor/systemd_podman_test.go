@@ -51,6 +51,17 @@ type fakePodmanRunner struct {
 func (r *fakePodmanRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := append([]string{name}, args...)
 	r.calls = append(r.calls, call)
+	// The runner is called via systemd-run --machine <user>@ --user --wait
+	// --collect --pipe -- podman <args> when RootlessUser is set. Unwrap
+	// for simpler matching.
+	if name == "systemd-run" {
+		for i, a := range args {
+			if a == "--" && i+1 < len(args) && args[i+1] == "podman" {
+				call = args[i+1:]
+				break
+			}
+		}
+	}
 	joined := strings.Join(call, " ")
 	for _, o := range r.overrides {
 		if o.contains != "" && strings.Contains(joined, o.contains) {
