@@ -149,6 +149,35 @@ func TestInspectorExecTrustedShell(t *testing.T) {
 	}
 }
 
+func TestInspectorRunTrustedShellInPodUsesContainerUser(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	env := map[string]string{"APP_USER": "admin"}
+	mounts := []string{"admiral-demo-web:/data"}
+	if _, err := inspector.RunTrustedShellInPod(context.Background(), "admiral-demo", "docker.io/gitea/gitea:1.22", env, mounts, "1000", "gitea migrate"); err != nil {
+		t.Fatalf("run trusted shell in pod: %v", err)
+	}
+
+	expected := []call{
+		{
+			name: "podman",
+			args: []string{
+				"run", "--rm", "--pod", "admiral-demo",
+				"--user", "1000",
+				"--env", "APP_USER=admin",
+				"-v", "admiral-demo-web:/data",
+				"docker.io/gitea/gitea:1.22",
+				"sh", "-c", "gitea migrate",
+			},
+		},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
 func TestInspectorVolumeMethods(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)
