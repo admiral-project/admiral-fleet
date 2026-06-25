@@ -131,6 +131,24 @@ func TestInspectorExecWithStdin(t *testing.T) {
 	}
 }
 
+func TestInspectorExecTrustedShell(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	if _, err := inspector.ExecTrustedShell(context.Background(), "my-container", "wp core is-installed || wp core install"); err != nil {
+		t.Fatalf("exec trusted shell: %v", err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(runner.calls))
+	}
+	expected := call{name: "podman", args: []string{"exec", "my-container", "sh", "-c", "wp core is-installed || wp core install"}}
+	if !reflect.DeepEqual(runner.calls[0], expected) {
+		t.Fatalf("unexpected call:\nwant: %#v\ngot:  %#v", expected, runner.calls[0])
+	}
+}
+
 func TestInspectorVolumeMethods(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)

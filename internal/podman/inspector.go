@@ -124,6 +124,14 @@ func (i *Inspector) ExecWithStdin(ctx context.Context, container string, env map
 	return i.execWithInput(ctx, container, env, stdin, args...)
 }
 
+// ExecTrustedShell executes a trusted shell command inside a container.
+// It is intended only for setup_command payloads coming from validated app
+// definitions stored in admirald, where shell features like variable expansion
+// and boolean chaining are explicitly part of the contract.
+func (i *Inspector) ExecTrustedShell(ctx context.Context, container, command string) ([]byte, error) {
+	return i.execTrustedWithInput(ctx, container, nil, nil, "sh", "-c", command)
+}
+
 func (i *Inspector) execWithInput(ctx context.Context, container string, env map[string]string, stdin io.Reader, args ...string) ([]byte, error) {
 	cmdArgs := []string{"exec"}
 	if stdin != nil {
@@ -158,6 +166,42 @@ func (i *Inspector) execWithInput(ctx context.Context, container string, env map
 	cmdArgs = append(cmdArgs, container)
 	cmdArgs = append(cmdArgs, args...)
 	return i.runWithStdin(ctx, stdin, cmdArgs...)
+}
+
+func (i *Inspector) execTrustedWithInput(ctx context.Context, container string, env map[string]string, stdin io.Reader, args ...string) ([]byte, error) {
+	cmdArgs := []string{"exec"}
+	if stdin != nil {
+		cmdArgs = append(cmdArgs, "-i")
+	}
+
+	var envFile string
+	if len(env) > 0 {
+		f, err := os.CreateTemp("", "admiral-env-")
+		if err != nil {
+			return nil, fmt.Errorf("create temp env file: %w", err)
+		}
+		envFile = f.Name()
+		defer os.Remove(envFile)
+
+		if err := f.Chmod(0600); err != nil {
+			return nil, fmt.Errorf("chmod temp env file: %w", err)
+		}
+
+		for k, v := range env {
+			if _, err := f.WriteString(fmt.Sprintf("%s=%s\n", k, v)); err != nil {
+				_ = f.Close()
+				return nil, fmt.Errorf("write temp env file: %w", err)
+			}
+		}
+		if err := f.Close(); err != nil {
+			return nil, fmt.Errorf("close temp env file: %w", err)
+		}
+		cmdArgs = append(cmdArgs, "--env-file", envFile)
+	}
+
+	cmdArgs = append(cmdArgs, container)
+	cmdArgs = append(cmdArgs, args...)
+	return i.runTrustedWithStdin(ctx, stdin, cmdArgs...)
 }
 
 func (i *Inspector) CopyToContainer(ctx context.Context, sourcePath, containerPath string) ([]byte, error) {
@@ -250,6 +294,32 @@ func (i *Inspector) runWithStdin(ctx context.Context, stdin io.Reader, args ...s
 	return runner.Run(runCtx, "podman", args...)
 }
 
+func (i *Inspector) runTrustedWithStdin(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+	timeout := i.Timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	if i.RootlessUser != "" {
+		return i.runAsUserWithStdinTrusted(runCtx, stdin, args...)
+	}
+
+	runner := i.Runner
+	if runner != nil {
+		if stdin != nil {
+			if runnerWithStdin, ok := runner.(stdinRunner); ok {
+				return runnerWithStdin.RunWithStdin(runCtx, stdin, "podman", args...)
+			}
+			return nil, fmt.Errorf("runner %T does not support stdin", runner)
+		}
+		return runner.Run(runCtx, "podman", args...)
+	}
+
+	return trustedCommand(runCtx, stdin, "podman", args...)
+}
+
 func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
 	u, err := user.Lookup(i.RootlessUser)
 	if err != nil {
@@ -278,4 +348,44 @@ func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, arg
 		return nil, fmt.Errorf("runner %T does not support stdin", runner)
 	}
 	return runner.Run(ctx, "runuser", runuserArgs...)
+}
+
+func (i *Inspector) runAsUserWithStdinTrusted(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+	u, err := user.Lookup(i.RootlessUser)
+	if err != nil {
+		return nil, fmt.Errorf("lookup rootless user %q: %w", i.RootlessUser, err)
+	}
+	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
+	runuserArgs := append([]string{"-u", i.RootlessUser, "--", "env", "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
+
+	runner := i.Runner
+	if runner != nil {
+		if stdin != nil {
+			if runnerWithStdin, ok := runner.(stdinRunner); ok {
+				return runnerWithStdin.RunWithStdin(ctx, stdin, "runuser", runuserArgs...)
+			}
+			return nil, fmt.Errorf("runner %T does not support stdin", runner)
+		}
+		return runner.Run(ctx, "runuser", runuserArgs...)
+	}
+
+	return trustedCommand(ctx, stdin, "runuser", runuserArgs...)
+}
+
+func trustedCommand(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
+	sanitizedArgs := security.SanitizeArgs(args)
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- trusted internal execution path for validated setup_command
+	cmd.Dir = "/tmp"
+	cmd.Stdin = stdin
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if stderr.Len() > 0 {
+			sanitizedStderr := security.Sanitize(stderr.String())
+			return out, fmt.Errorf("%s %v: %w: %s", name, sanitizedArgs, err, sanitizedStderr)
+		}
+		return out, fmt.Errorf("%s %v: %w", name, sanitizedArgs, err)
+	}
+	return out, nil
 }
