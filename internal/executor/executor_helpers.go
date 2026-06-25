@@ -171,6 +171,53 @@ func sharedVolumeName(instanceID, volumeName string) string {
 func podName(instanceID string) string {
 	return fmt.Sprintf("admiral-%s", quadlet.SafeName(instanceID))
 }
+
+func serviceVolumeTarget(svc admiral.ServiceInfo) string {
+	img := strings.ToLower(svc.Image)
+	switch {
+	case strings.Contains(img, "postgres"):
+		return "/var/lib/postgresql/data"
+	case strings.Contains(img, "mariadb"), strings.Contains(img, "mysql"):
+		return "/var/lib/mysql"
+	case strings.Contains(img, "wordpress"):
+		return "/var/www/html/wp-content"
+	case svc.Name == "db":
+		return "/var/lib/postgresql/data"
+	default:
+		return "/data"
+	}
+}
+
+func serviceRuntimeEnv(svc admiral.ServiceInfo) map[string]string {
+	env := make(map[string]string, len(svc.Env)+len(svc.Secrets))
+	for key, value := range svc.Env {
+		env[key] = value
+	}
+	for key, value := range svc.Secrets {
+		env[key] = value
+	}
+	return env
+}
+
+func serviceRuntimeMounts(instanceID string, svc admiral.ServiceInfo) []string {
+	mounts := make([]string, 0, len(svc.SharedVolumes)+1)
+	if svc.Volume != "" {
+		mounts = append(mounts, fmt.Sprintf("%s:%s", volumeName(instanceID, svc.Name), serviceVolumeTarget(svc)))
+	}
+	for _, shared := range svc.SharedVolumes {
+		mounts = append(mounts, fmt.Sprintf("%s:%s", sharedVolumeName(instanceID, shared.Name), shared.Mount))
+	}
+	return mounts
+}
+
+func (e *SystemdPodmanExecutor) runServiceCommand(ctx context.Context, instanceID string, svc admiral.ServiceInfo, args ...string) ([]byte, error) {
+	return e.podman().RunTrustedInPod(ctx, podName(instanceID), svc.Image, serviceRuntimeEnv(svc), serviceRuntimeMounts(instanceID, svc), args...)
+}
+
+func (e *SystemdPodmanExecutor) runServiceCommandTrustedShell(ctx context.Context, instanceID string, svc admiral.ServiceInfo, command string) ([]byte, error) {
+	return e.podman().RunTrustedShellInPod(ctx, podName(instanceID), svc.Image, serviceRuntimeEnv(svc), serviceRuntimeMounts(instanceID, svc), command)
+}
+
 func portsFilePath(dataDir, instanceID string) string {
 	return filepath.Join(dataDir, "instances", instanceID, "ports.json")
 }

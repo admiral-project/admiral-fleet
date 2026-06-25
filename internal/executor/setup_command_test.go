@@ -43,11 +43,14 @@ func (r *setupRacePodmanRunner) Run(_ context.Context, name string, args ...stri
 		return []byte{}, nil
 	case strings.Contains(joined, "podman container inspect admiral-racedemo-backend --format json"):
 		return []byte(`[{"State":{"Status":"running"}}]`), nil
-	case strings.Contains(joined, "podman exec admiral-racedemo-db healthcheck"):
+	case strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&
+		strings.Contains(joined, "example.com/db:1 healthcheck"):
 		return []byte("ok"), nil
-	case strings.Contains(joined, "podman exec admiral-racedemo-backend app healthcheck"):
+	case strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&
+		strings.Contains(joined, "example.com/app:1 app healthcheck"):
 		return []byte("ok"), nil
-	case strings.Contains(joined, "podman exec admiral-racedemo-backend sh -c app bootstrap"):
+	case strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&
+		strings.Contains(joined, "example.com/app:1 sh -c app bootstrap"):
 		return []byte("ok"), nil
 	case strings.Contains(joined, "podman port admiral-racedemo-infra 8000/tcp"):
 		return []byte("127.0.0.1:40013"), nil
@@ -135,8 +138,8 @@ func TestSetupMarkerAbsentOnFreshNode(t *testing.T) {
 // TestProvisionSetupCommandSkippedWhenSetupCompleted verifies that when
 // admirald sends SetupCompleted=true, the executor does NOT attempt to
 // run setup_command even though services declare it. The provision
-// should succeed with has_setup:true in metadata without invoking
-// podman exec.
+// should succeed with has_setup:true in metadata without invoking the
+// helper setup container.
 func TestProvisionSetupCommandSkippedWhenSetupCompleted(t *testing.T) {
 	tmpDir := t.TempDir()
 	quadletDir := filepath.Join(tmpDir, "quadlet")
@@ -199,11 +202,11 @@ func TestProvisionSetupCommandSkippedWhenSetupCompleted(t *testing.T) {
 	if !strings.Contains(res.Metadata, "\"has_setup\":true") {
 		t.Fatalf("expected has_setup:true in metadata, got %s", res.Metadata)
 	}
-	// Confirm no podman exec sh -c was invoked
+	// Confirm no setup helper shell was invoked.
 	for _, call := range podmanRunner.calls {
 		joined := strings.Join(call, " ")
-		if strings.Contains(joined, "podman exec") && strings.Contains(joined, "sh -c") {
-			t.Fatalf("setup_command should have been skipped, but podman exec was called: %s", joined)
+		if strings.Contains(joined, "podman run") && strings.Contains(joined, "sh -c") {
+			t.Fatalf("setup_command should have been skipped, but helper run was called: %s", joined)
 		}
 	}
 }
@@ -274,8 +277,8 @@ func TestProvisionSetupCommandSkippedByMarker(t *testing.T) {
 	}
 	for _, call := range podmanRunner.calls {
 		joined := strings.Join(call, " ")
-		if strings.Contains(joined, "podman exec") && strings.Contains(joined, "sh -c") {
-			t.Fatalf("setup_command should have been skipped by marker, but podman exec was called: %s", joined)
+		if strings.Contains(joined, "podman run") && strings.Contains(joined, "sh -c") {
+			t.Fatalf("setup_command should have been skipped by marker, but helper run was called: %s", joined)
 		}
 	}
 }
@@ -352,14 +355,17 @@ func TestProvisionSetupCommandWaitsForDependenciesToBeReady(t *testing.T) {
 	foundDependencyCheck := false
 	foundSetupExec := false
 	for _, call := range podmanRunner.calls {
-		if strings.Contains(strings.Join(call, " "), "podman exec admiral-racedemo-db healthcheck") {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&
+			strings.Contains(joined, "example.com/db:1 healthcheck") {
 			foundDependencyCheck = true
 		}
-		if strings.Contains(strings.Join(call, " "), "podman exec admiral-racedemo-backend sh -c app bootstrap") {
+		if strings.Contains(joined, "podman run --rm --pod admiral-racedemo") &&
+			strings.Contains(joined, "example.com/app:1 sh -c app bootstrap") {
 			foundSetupExec = true
 		}
 	}
 	if !foundDependencyCheck || !foundSetupExec {
-		t.Fatalf("expected dependency readiness checks and setup_command exec, calls: %#v", podmanRunner.calls)
+		t.Fatalf("expected dependency readiness checks and setup helper run, calls: %#v", podmanRunner.calls)
 	}
 }

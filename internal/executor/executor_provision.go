@@ -247,7 +247,7 @@ func (e *SystemdPodmanExecutor) runSetupCommands(ctx context.Context, task admir
 			return fmt.Errorf("wait for setup service %q: %w", svc.Name, err)
 		}
 		setupCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-		out, err := e.podman().ExecTrustedShell(setupCtx, containerName(task.InstanceID, svc.Name), svc.SetupCommand)
+		out, err := e.runServiceCommandTrustedShell(setupCtx, task.InstanceID, svc, svc.SetupCommand)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("setup_command for service %q: %w: %s", svc.Name, err, string(out))
@@ -274,7 +274,7 @@ func (e *SystemdPodmanExecutor) waitForServiceReady(ctx context.Context, instanc
 
 	container := containerName(instanceID, svc.Name)
 	for retry := 0; retry < attempts; retry++ {
-		ready, err := e.serviceReadyCheck(ctx, container, svc, hostPorts, timeout)
+		ready, err := e.serviceReadyCheck(ctx, instanceID, container, svc, hostPorts, timeout)
 		if err == nil && ready {
 			return nil
 		}
@@ -287,7 +287,7 @@ func (e *SystemdPodmanExecutor) waitForServiceReady(ctx context.Context, instanc
 	return fmt.Errorf("service %q did not reach ready state in time", svc.Name)
 }
 
-func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, container string, svc admiral.ServiceInfo, hostPorts map[string]int, timeout time.Duration) (bool, error) {
+func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceID, container string, svc admiral.ServiceInfo, hostPorts map[string]int, timeout time.Duration) (bool, error) {
 	if err := e.podman().ContainerExists(ctx, container); err != nil {
 		return false, err
 	}
@@ -312,7 +312,7 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, container
 		if len(svc.HealthCheck.Command) == 0 {
 			return false, fmt.Errorf("service %q command healthcheck requires command", svc.Name)
 		}
-		out, err := e.podman().Exec(checkCtx, container, svc.HealthCheck.Command...)
+		out, err := e.runServiceCommand(checkCtx, instanceID, svc, svc.HealthCheck.Command...)
 		if err != nil {
 			return false, fmt.Errorf("service %q command healthcheck failed: %w: %s", svc.Name, err, string(out))
 		}

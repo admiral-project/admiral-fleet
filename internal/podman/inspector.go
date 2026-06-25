@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -130,6 +131,38 @@ func (i *Inspector) ExecWithStdin(ctx context.Context, container string, env map
 // and boolean chaining are explicitly part of the contract.
 func (i *Inspector) ExecTrustedShell(ctx context.Context, container, command string) ([]byte, error) {
 	return i.execTrustedWithInput(ctx, container, nil, nil, "sh", "-c", command)
+}
+
+// RunTrustedInPod runs a one-off helper container inside an existing pod with
+// trusted arguments, inherited service mounts, and explicit environment.
+func (i *Inspector) RunTrustedInPod(ctx context.Context, pod, image string, env map[string]string, mounts []string, args ...string) ([]byte, error) {
+	cmdArgs := []string{"run", "--rm", "--pod", pod}
+
+	if len(env) > 0 {
+		keys := make([]string, 0, len(env))
+		for key := range env {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			cmdArgs = append(cmdArgs, "--env", fmt.Sprintf("%s=%s", key, env[key]))
+		}
+	}
+
+	for _, mount := range mounts {
+		if strings.TrimSpace(mount) == "" {
+			continue
+		}
+		cmdArgs = append(cmdArgs, "-v", mount)
+	}
+
+	cmdArgs = append(cmdArgs, image)
+	cmdArgs = append(cmdArgs, args...)
+	return i.runTrustedWithStdin(ctx, nil, cmdArgs...)
+}
+
+func (i *Inspector) RunTrustedShellInPod(ctx context.Context, pod, image string, env map[string]string, mounts []string, command string) ([]byte, error) {
+	return i.RunTrustedInPod(ctx, pod, image, env, mounts, "sh", "-c", command)
 }
 
 func (i *Inspector) execWithInput(ctx context.Context, container string, env map[string]string, stdin io.Reader, args ...string) ([]byte, error) {
