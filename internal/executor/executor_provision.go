@@ -43,34 +43,47 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		return result
 	}
 
+	slog.Info("provision: allocating host ports", "instance", task.InstanceID)
 	ports, err := e.allocateHostPorts(e.DataDir, task.InstanceID, task.Services)
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("allocate host ports for instance %q: %v", task.InstanceID, err)
 		return result
 	}
+	slog.Info("provision: host ports allocated", "instance", task.InstanceID, "ports", ports)
 	r := e.renderer()
+	slog.Info("provision: renderer configured", "instance", task.InstanceID, "quadlet_dir", r.QuadletDir, "data_dir", r.DataDir)
 	r.HostPorts = ports
+	slog.Info("provision: rendering quadlet files", "instance", task.InstanceID)
 	if err := r.Render(task); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("render quadlet for instance %q: %v", task.InstanceID, err)
+		slog.Error("provision: render failed", "instance", task.InstanceID, "error", err)
 		return result
 	}
+	slog.Info("provision: quadlet files rendered", "instance", task.InstanceID)
+	slog.Info("provision: chown instance data", "instance", task.InstanceID)
 	if err := e.chownInstanceData(task.InstanceID); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("chown instance data for %q: %v", task.InstanceID, err)
+		slog.Error("provision: chown failed", "instance", task.InstanceID, "error", err)
 		return result
 	}
+	slog.Info("provision: creating podman secrets", "instance", task.InstanceID)
 	if err := e.createPodmanSecrets(ctx, task); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("create podman secrets for %q: %v", task.InstanceID, err)
+		slog.Error("provision: create secrets failed", "instance", task.InstanceID, "error", err)
 		return result
 	}
+	slog.Info("provision: secrets created, reloading systemd", "instance", task.InstanceID)
 	if err := e.systemd().DaemonReload(ctx); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("reload systemd for instance %q: %v", task.InstanceID, err)
+		slog.Error("provision: daemon-reload failed", "instance", task.InstanceID, "error", err)
 		return result
 	}
+	slog.Info("provision: systemd daemon reloaded", "instance", task.InstanceID)
 	for _, svc := range task.Services {
 		if svc.Registry != nil {
 			loginCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
