@@ -468,35 +468,38 @@ func (i *Inspector) runAsUserSystemdSession(ctx context.Context, stdin io.Reader
 }
 
 func (i *Inspector) runAsUserWithStdinTrusted(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
-	// Ensure systemd-machined is active so --machine=user@ resolves.
-	_ = exec.CommandContext(ctx, "systemctl", "start", "systemd-machined").Run()
+	// Detect if this is an exec operation that needs the user's systemd
+	// session for cgroup access. Quadlet containers use systemd cgroup
+	// manager; running podman exec via runuser falls back to cgroupfs
+	// and fails with "systemd slice received as cgroup parent when
+	// using cgroupfs".
+	if len(args) > 0 && args[0] == "exec" {
+		return i.runAsUserSystemdSession(ctx, stdin, args...)
+	}
 
-	sdrunArgs := append([]string{
-		"--machine", i.RootlessUser + "@",
-		"--user",
-		"--wait",
-		"--collect",
-		"--pipe",
-		"--",
-		"podman",
-	}, args...)
-	slog.Debug("running trusted podman via user systemd session",
-		"user", i.RootlessUser,
-		"args", args,
-	)
+	// Use runuser to run podman as the rootless user, with XDG_RUNTIME_DIR set
+	// so podman can find the user's runtime directory (rootless containers).
+	// This path is safe for commands that don't interact with Quadlet cgroups
+	// (e.g. podman run --rm --pod for healthchecks, podman secret create).
+	u, err := user.Lookup(i.RootlessUser)
+	if err != nil {
+		return nil, fmt.Errorf("lookup rootless user %q: %w", i.RootlessUser, err)
+	}
+	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
+	runuserArgs := append([]string{"-u", i.RootlessUser, "--", "env", "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
 
 	runner := i.Runner
 	if runner != nil {
 		if stdin != nil {
 			if runnerWithStdin, ok := runner.(stdinRunner); ok {
-				return runnerWithStdin.RunWithStdin(ctx, stdin, "systemd-run", sdrunArgs...)
+				return runnerWithStdin.RunWithStdin(ctx, stdin, "runuser", runuserArgs...)
 			}
 			return nil, fmt.Errorf("runner %T does not support stdin", runner)
 		}
-		return runner.Run(ctx, "systemd-run", sdrunArgs...)
+		return runner.Run(ctx, "runuser", runuserArgs...)
 	}
 
-	return trustedCommand(ctx, stdin, "systemd-run", sdrunArgs...)
+	return trustedCommand(ctx, stdin, "runuser", runuserArgs...)
 }
 
 func trustedCommand(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
