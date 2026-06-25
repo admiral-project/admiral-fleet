@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
@@ -133,6 +134,20 @@ func (e *SystemdPodmanExecutor) podman() *podman.Inspector {
 	return insp
 }
 
+// podmanForSetup returns a copy of the podman inspector with a longer timeout
+// suitable for long-running setup_command execution.
+func (e *SystemdPodmanExecutor) podmanForSetup() *podman.Inspector {
+	insp := e.podman()
+	if insp == nil {
+		return nil
+	}
+	clone := *insp
+	if clone.Timeout < 10*time.Minute {
+		clone.Timeout = 10 * time.Minute
+	}
+	return &clone
+}
+
 func (e *SystemdPodmanExecutor) renderer() *quadlet.Renderer {
 	if e.Renderer != nil {
 		return e.Renderer
@@ -220,6 +235,14 @@ func (e *SystemdPodmanExecutor) runServiceCommandNoEntrypoint(ctx context.Contex
 
 func (e *SystemdPodmanExecutor) runServiceCommandTrustedShell(ctx context.Context, instanceID string, svc admiral.ServiceInfo, command string) ([]byte, error) {
 	return e.podman().RunTrustedShellInPod(ctx, podName(instanceID), svc.Image, serviceRuntimeEnv(svc), serviceRuntimeMounts(instanceID, svc), svc.User, command)
+}
+
+func (e *SystemdPodmanExecutor) runServiceSetupTrustedShell(ctx context.Context, instanceID string, svc admiral.ServiceInfo, command string) ([]byte, error) {
+	insp := e.podmanForSetup()
+	if insp == nil {
+		return nil, fmt.Errorf("podman inspector is not configured")
+	}
+	return insp.RunTrustedShellInPod(ctx, podName(instanceID), svc.Image, serviceRuntimeEnv(svc), serviceRuntimeMounts(instanceID, svc), svc.User, command)
 }
 
 func portsFilePath(dataDir, instanceID string) string {

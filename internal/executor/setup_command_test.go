@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/systemd"
@@ -67,6 +68,58 @@ func (r *setupRacePodmanRunner) Run(_ context.Context, name string, args ...stri
 		return []byte("127.0.0.1:40013"), nil
 	case strings.Contains(joined, "podman port admiral-racedemo-infra 5432/tcp"):
 		return []byte("127.0.0.1:40014"), nil
+	default:
+		return []byte(`[]`), nil
+	}
+}
+
+type setupTimeoutPodmanRunner struct {
+	setupDeadline time.Duration
+}
+
+func (r *setupTimeoutPodmanRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	call := append([]string{name}, args...)
+	if name == "systemd-run" {
+		for i, a := range args {
+			if a == "--" && i+1 < len(args) && args[i+1] == "podman" {
+				call = args[i+1:]
+				break
+			}
+		}
+	}
+	joined := strings.Join(call, " ")
+	if strings.Contains(joined, "podman run --rm --pod admiral-timeoutdemo") &&
+		strings.Contains(joined, "example.com/app:1") &&
+		strings.Contains(joined, "app bootstrap") {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			r.setupDeadline = 0
+		} else {
+			r.setupDeadline = time.Until(deadline)
+		}
+		return []byte("ok"), nil
+	}
+	switch {
+	case strings.Contains(joined, "podman pod exists admiral-timeoutdemo"):
+		return nil, os.ErrNotExist
+	case strings.Contains(joined, "podman container exists admiral-timeoutdemo-db"):
+		return []byte{}, nil
+	case strings.Contains(joined, "podman container inspect admiral-timeoutdemo-db --format json"):
+		return []byte(`[{"State":{"Status":"running"}}]`), nil
+	case strings.Contains(joined, "podman container exists admiral-timeoutdemo-backend"):
+		return []byte{}, nil
+	case strings.Contains(joined, "podman container inspect admiral-timeoutdemo-backend --format json"):
+		return []byte(`[{"State":{"Status":"running"}}]`), nil
+	case strings.Contains(joined, "podman run --rm --pod admiral-timeoutdemo") &&
+		strings.Contains(joined, "example.com/db:1") &&
+		strings.Contains(joined, "healthcheck"):
+		return []byte("ok"), nil
+	case strings.Contains(joined, "podman run --rm --pod admiral-timeoutdemo") &&
+		strings.Contains(joined, "example.com/app:1") &&
+		strings.Contains(joined, "healthcheck"):
+		return []byte("ok"), nil
+	case strings.Contains(joined, "podman port admiral-timeoutdemo-infra 8000/tcp"):
+		return []byte("127.0.0.1:40013"), nil
 	default:
 		return []byte(`[]`), nil
 	}
@@ -379,5 +432,71 @@ func TestProvisionSetupCommandWaitsForDependenciesToBeReady(t *testing.T) {
 	}
 	if !foundDependencyCheck || !foundSetupExec {
 		t.Fatalf("expected dependency readiness checks and setup helper run, calls: %#v", podmanRunner.calls)
+	}
+}
+
+func TestProvisionSetupCommandUsesExtendedTimeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	quadletDir := filepath.Join(tmpDir, "quadlet")
+	dataDir := filepath.Join(tmpDir, "data")
+	if err := os.MkdirAll(quadletDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "instances"), 0751); err != nil {
+		t.Fatal(err)
+	}
+
+	systemdRunner := &fakeSystemdRunner{}
+	podmanRunner := &setupTimeoutPodmanRunner{}
+	exec := NewSystemdPodmanWithFS(
+		systemd.NewManager(systemdRunner),
+		podman.NewInspector(podmanRunner),
+		quadletDir,
+		dataDir,
+		"nobody",
+		fakeFS{},
+		fakeUserLookup{},
+	)
+
+	task := admiral.FleetTask{
+		TaskID:      "task_timeout",
+		OperationID: "op_timeout",
+		NodeID:      "node_1",
+		Action:      admiral.ActionProvisionApp,
+		InstanceID:  "timeoutdemo",
+		Tier: admiral.TierInfo{
+			Name:    "dev",
+			CPU:     1,
+			Memory:  "512MiB",
+			Storage: "1GiB",
+		},
+		Services: []admiral.ServiceInfo{
+			{
+				Name:         "backend",
+				Image:        "example.com/app:1",
+				DependsOn:    []string{"db"},
+				SetupCommand: "app bootstrap",
+				HealthCheck: &admiral.YAMLHealthCheck{
+					Type:    "command",
+					Command: []string{"app", "healthcheck"},
+				},
+			},
+			{
+				Name:  "db",
+				Image: "example.com/db:1",
+				HealthCheck: &admiral.YAMLHealthCheck{
+					Type:    "command",
+					Command: []string{"healthcheck"},
+				},
+			},
+		},
+	}
+
+	res := exec.Execute(context.Background(), task, "node_1")
+	if !res.Success {
+		t.Fatalf("expected success, got error %q", res.Error)
+	}
+	if podmanRunner.setupDeadline < 5*time.Minute {
+		t.Fatalf("expected setup timeout to be extended, got %s", podmanRunner.setupDeadline)
 	}
 }

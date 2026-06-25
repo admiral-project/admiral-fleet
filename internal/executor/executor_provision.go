@@ -261,7 +261,7 @@ func (e *SystemdPodmanExecutor) runSetupCommands(ctx context.Context, task admir
 			return fmt.Errorf("wait for setup service %q: %w", svc.Name, err)
 		}
 		setupCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-		out, err := e.runServiceCommandTrustedShell(setupCtx, task.InstanceID, svc, svc.SetupCommand)
+		out, err := e.runServiceSetupTrustedShell(setupCtx, task.InstanceID, svc, svc.SetupCommand)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("setup_command for service %q: %w: %s", svc.Name, err, string(out))
