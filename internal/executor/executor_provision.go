@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -141,7 +143,7 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		if markerExists := e.setupMarkerExists(task.InstanceID); markerExists {
 			hasSetup = true // already ran, report has_setup:true so admirald marks setup_completed
 		} else {
-			setupErr := e.runSetupCommands(ctx, task)
+			setupErr := e.runSetupCommands(ctx, task, hostPorts)
 			if setupErr != nil {
 				result.Success = false
 				result.Error = fmt.Sprintf("setup_command failed: %v", setupErr)
@@ -221,23 +223,140 @@ func (e *SystemdPodmanExecutor) writeSetupMarker(instanceID string) {
 // string comes from a trusted app definition (audited DB data), not from
 // end-user input.
 //
-// A generous timeout (10 minutes) is applied because setup commands
-// such as "bench new-site" for ERPNext can take several minutes to
-// complete.
-func (e *SystemdPodmanExecutor) runSetupCommands(ctx context.Context, task admiral.FleetTask) error {
+// A generous timeout (10 minutes) is applied because application
+// bootstrap commands can take several minutes to complete.
+func (e *SystemdPodmanExecutor) runSetupCommands(ctx context.Context, task admiral.FleetTask, hostPorts map[string]int) error {
+	servicesByName := make(map[string]admiral.ServiceInfo, len(task.Services))
+	for _, svc := range task.Services {
+		servicesByName[svc.Name] = svc
+	}
 	for _, svc := range task.Services {
 		if strings.TrimSpace(svc.SetupCommand) == "" {
 			continue
 		}
-		container := containerName(task.InstanceID, svc.Name)
+		for _, depName := range svc.DependsOn {
+			depSvc, ok := servicesByName[depName]
+			if !ok {
+				continue
+			}
+			if err := e.waitForServiceReady(ctx, task.InstanceID, depSvc, hostPorts); err != nil {
+				return fmt.Errorf("wait for dependency service %q: %w", depName, err)
+			}
+		}
+		if err := e.waitForServiceReady(ctx, task.InstanceID, svc, hostPorts); err != nil {
+			return fmt.Errorf("wait for setup service %q: %w", svc.Name, err)
+		}
 		setupCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-		out, err := e.podman().Exec(setupCtx, container, "sh", "-c", svc.SetupCommand)
+		out, err := e.podman().Exec(setupCtx, containerName(task.InstanceID, svc.Name), "sh", "-c", svc.SetupCommand)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("setup_command for service %q: %w: %s", svc.Name, err, string(out))
 		}
 	}
 	return nil
+}
+
+func (e *SystemdPodmanExecutor) waitForServiceReady(ctx context.Context, instanceID string, svc admiral.ServiceInfo, hostPorts map[string]int) error {
+	interval := 2 * time.Second
+	timeout := 5 * time.Second
+	attempts := 60
+	if svc.HealthCheck != nil {
+		if svc.HealthCheck.IntervalSeconds > 0 {
+			interval = time.Duration(svc.HealthCheck.IntervalSeconds) * time.Second
+		}
+		if svc.HealthCheck.TimeoutSeconds > 0 {
+			timeout = time.Duration(svc.HealthCheck.TimeoutSeconds) * time.Second
+		}
+		if svc.HealthCheck.FailureThreshold > 0 {
+			attempts = svc.HealthCheck.FailureThreshold
+		}
+	}
+
+	container := containerName(instanceID, svc.Name)
+	for retry := 0; retry < attempts; retry++ {
+		ready, err := e.serviceReadyCheck(ctx, container, svc, hostPorts, timeout)
+		if err == nil && ready {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+	return fmt.Errorf("service %q did not reach ready state in time", svc.Name)
+}
+
+func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, container string, svc admiral.ServiceInfo, hostPorts map[string]int, timeout time.Duration) (bool, error) {
+	if err := e.podman().ContainerExists(ctx, container); err != nil {
+		return false, err
+	}
+	inspect, err := e.podman().ContainerInspect(ctx, container)
+	if err != nil {
+		return false, err
+	}
+	if !strings.Contains(strings.ToLower(string(inspect)), `"status":"running"`) {
+		return false, fmt.Errorf("container %q is not running yet", container)
+	}
+	if svc.HealthCheck == nil {
+		return true, nil
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	switch strings.ToLower(strings.TrimSpace(svc.HealthCheck.Type)) {
+	case "", "none":
+		return true, nil
+	case "command":
+		if len(svc.HealthCheck.Command) == 0 {
+			return false, fmt.Errorf("service %q command healthcheck requires command", svc.Name)
+		}
+		out, err := e.podman().Exec(checkCtx, container, svc.HealthCheck.Command...)
+		if err != nil {
+			return false, fmt.Errorf("service %q command healthcheck failed: %w: %s", svc.Name, err, string(out))
+		}
+		return true, nil
+	case "tcp":
+		hostPort, ok := hostPorts[svc.Name]
+		if !ok || hostPort <= 0 {
+			return false, fmt.Errorf("service %q tcp healthcheck requires a published port", svc.Name)
+		}
+		conn, err := (&net.Dialer{Timeout: timeout}).DialContext(checkCtx, "tcp", fmt.Sprintf("127.0.0.1:%d", hostPort))
+		if err != nil {
+			return false, err
+		}
+		_ = conn.Close()
+		return true, nil
+	case "http":
+		hostPort, ok := hostPorts[svc.Name]
+		if !ok || hostPort <= 0 {
+			return false, fmt.Errorf("service %q http healthcheck requires a published port", svc.Name)
+		}
+		path := svc.HealthCheck.Path
+		if path == "" {
+			path = "/"
+		}
+		expectedStatus := svc.HealthCheck.ExpectedStatus
+		if expectedStatus == 0 {
+			expectedStatus = http.StatusOK
+		}
+		req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", hostPort, path), nil)
+		if err != nil {
+			return false, err
+		}
+		resp, err := (&http.Client{Timeout: timeout}).Do(req)
+		if err != nil {
+			return false, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != expectedStatus {
+			return false, fmt.Errorf("service %q http healthcheck returned %d, expected %d", svc.Name, resp.StatusCode, expectedStatus)
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("service %q healthcheck type %q is unsupported", svc.Name, svc.HealthCheck.Type)
+	}
 }
 
 func validateProvisionTask(task admiral.FleetTask) error {
