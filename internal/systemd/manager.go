@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"os/user"
 	"strings"
 	"time"
 
@@ -56,17 +55,15 @@ func (r CommandRunner) runWithStdin(ctx context.Context, stdin io.Reader, name s
 }
 
 type Manager struct {
-	Runner     Runner
-	Timeout    time.Duration
-	RunAsUser  string // empty = rootful systemd; set = rootless user systemd --user
-	lookupUser func(string) (*user.User, error)
+	Runner    Runner
+	Timeout   time.Duration
+	RunAsUser string // empty = rootful systemd; set = rootless user systemd --user
 }
 
 func NewManager(runner Runner) *Manager {
 	return &Manager{
-		Runner:     runner,
-		Timeout:    30 * time.Second,
-		lookupUser: user.Lookup,
+		Runner:  runner,
+		Timeout: 30 * time.Second,
 	}
 }
 
@@ -164,20 +161,9 @@ func (m *Manager) runAsUser(ctx context.Context, runner Runner, args ...string) 
 }
 
 func (m *Manager) runAsUserCommand(ctx context.Context, runner Runner, args ...string) ([]byte, error) {
-	// EL10/systemd 257: systemctl --machine=<user>@ is interpreted as a local
-	// container name, not a user manager. Use runuser with an explicit
-	// XDG_RUNTIME_DIR to target the rootless user's systemd --user session.
-	lookup := m.lookupUser
-	if lookup == nil {
-		lookup = user.Lookup
-	}
-	u, err := lookup(m.RunAsUser)
-	if err != nil {
-		return nil, fmt.Errorf("lookup user %q: %w", m.RunAsUser, err)
-	}
-	xdgRuntimeDir := "/run/user/" + u.Uid
-	runuserArgs := append([]string{"-u", m.RunAsUser, "--", "env", "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "systemctl", "--user"}, args...)
-	return runner.Run(ctx, "runuser", runuserArgs...)
+	systemctlArgs := append([]string{"systemctl", "--machine=" + m.RunAsUser + "@", "--user"}, args...)
+	cmdArgs := append([]string{"--wait", "--collect", "--working-directory=/tmp"}, systemctlArgs...)
+	return runner.Run(ctx, "systemd-run", cmdArgs...)
 }
 
 func (m *Manager) ensureLingerEnabled(ctx context.Context, runner Runner) error {
