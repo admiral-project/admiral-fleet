@@ -17,8 +17,9 @@ import (
 )
 
 type setupRacePodmanRunner struct {
-	calls       [][]string
-	existsCalls int
+	calls              [][]string
+	backendExistsCalls int
+	dbExistsCalls      int
 }
 
 func (r *setupRacePodmanRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -27,25 +28,30 @@ func (r *setupRacePodmanRunner) Run(_ context.Context, name string, args ...stri
 	joined := strings.Join(call, " ")
 
 	switch {
-	case joined == "podman pod exists admiral-racedemo":
+	case strings.Contains(joined, "podman pod exists admiral-racedemo"):
 		return nil, os.ErrNotExist
-	case joined == "podman container exists admiral-racedemo-backend":
-		r.existsCalls++
-		if r.existsCalls < 3 {
+	case strings.Contains(joined, "podman container exists admiral-racedemo-db"):
+		r.dbExistsCalls++
+		return []byte{}, nil
+	case strings.Contains(joined, "podman container inspect admiral-racedemo-db --format json"):
+		return []byte(`[{"State":{"Status":"running"}}]`), nil
+	case strings.Contains(joined, "podman container exists admiral-racedemo-backend"):
+		r.backendExistsCalls++
+		if r.backendExistsCalls < 3 {
 			return nil, errors.New("no such container")
 		}
 		return []byte{}, nil
-	case joined == "podman container inspect admiral-racedemo-backend --format json":
+	case strings.Contains(joined, "podman container inspect admiral-racedemo-backend --format json"):
 		return []byte(`[{"State":{"Status":"running"}}]`), nil
-	case joined == "podman exec admiral-racedemo-db healthcheck":
+	case strings.Contains(joined, "podman exec admiral-racedemo-db healthcheck"):
 		return []byte("ok"), nil
-	case joined == "podman exec admiral-racedemo-backend app healthcheck":
+	case strings.Contains(joined, "podman exec admiral-racedemo-backend app healthcheck"):
 		return []byte("ok"), nil
 	case strings.Contains(joined, "podman exec admiral-racedemo-backend sh -c app bootstrap"):
 		return []byte("ok"), nil
-	case joined == "podman port admiral-racedemo-infra 8000/tcp":
+	case strings.Contains(joined, "podman port admiral-racedemo-infra 8000/tcp"):
 		return []byte("127.0.0.1:40013"), nil
-	case joined == "podman port admiral-racedemo-infra 5432/tcp":
+	case strings.Contains(joined, "podman port admiral-racedemo-infra 5432/tcp"):
 		return []byte("127.0.0.1:40014"), nil
 	default:
 		return []byte(`[]`), nil
@@ -337,19 +343,23 @@ func TestProvisionSetupCommandWaitsForDependenciesToBeReady(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("expected success, got error %q", res.Error)
 	}
-	if podmanRunner.existsCalls < 3 {
-		t.Fatalf("expected repeated container existence checks, got %d", podmanRunner.existsCalls)
+	if podmanRunner.backendExistsCalls < 3 {
+		t.Fatalf("expected repeated backend container existence checks, got %d", podmanRunner.backendExistsCalls)
 	}
-	foundExec := false
+	if podmanRunner.dbExistsCalls == 0 {
+		t.Fatal("expected dependency container readiness checks for db")
+	}
+	foundDependencyCheck := false
+	foundSetupExec := false
 	for _, call := range podmanRunner.calls {
 		if strings.Contains(strings.Join(call, " "), "podman exec admiral-racedemo-db healthcheck") {
-			foundExec = true
+			foundDependencyCheck = true
 		}
 		if strings.Contains(strings.Join(call, " "), "podman exec admiral-racedemo-backend sh -c app bootstrap") {
-			foundExec = true
+			foundSetupExec = true
 		}
 	}
-	if !foundExec {
+	if !foundDependencyCheck || !foundSetupExec {
 		t.Fatalf("expected dependency readiness checks and setup_command exec, calls: %#v", podmanRunner.calls)
 	}
 }
