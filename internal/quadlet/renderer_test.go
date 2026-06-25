@@ -191,6 +191,98 @@ func TestRendererWritesSharedVolumesAndDependencies(t *testing.T) {
 	}
 }
 
+func TestRendererRendersERPNextFrontendWithSitesAndLogs(t *testing.T) {
+	quadletDir := t.TempDir()
+	dataDir := t.TempDir()
+	renderer := NewRenderer(quadletDir, dataDir)
+
+	task := admiral.FleetTask{
+		InstanceID: "erpnext001",
+		Tier: admiral.TierInfo{
+			CPU:    1,
+			Memory: "512M",
+		},
+		SharedVolumes: []admiral.SharedVolumeInfo{
+			{
+				Name:     "logs",
+				Mount:    "/home/frappe/frappe-bench/logs",
+				Services: []string{"frontend", "backend", "setup", "websocket", "scheduler", "worker-default"},
+			},
+			{
+				Name:     "sites",
+				Mount:    "/home/frappe/frappe-bench/sites",
+				Services: []string{"frontend", "backend", "setup", "websocket", "scheduler", "worker-default"},
+			},
+		},
+		Services: []admiral.ServiceInfo{
+			{
+				Name:      "frontend",
+				Image:     "docker.io/frappe/erpnext:v15.10.0",
+				Port:      8080,
+				Command:   "nginx-entrypoint.sh",
+				DependsOn: []string{"backend", "websocket"},
+				Requires:  []string{"backend", "websocket"},
+				SharedVolumes: []admiral.ServiceSharedVolumeMount{
+					{Name: "logs", Mount: "/home/frappe/frappe-bench/logs"},
+					{Name: "sites", Mount: "/home/frappe/frappe-bench/sites"},
+				},
+				Env: map[string]string{
+					"BACKEND":                  "127.0.0.1:8000",
+					"SOCKETIO":                 "127.0.0.1:9000",
+					"FRAPPE_SITE_NAME_HEADER":  "frontend",
+					"UPSTREAM_REAL_IP_ADDRESS": "127.0.0.1",
+					"UPSTREAM_REAL_IP_HEADER":  "X-Forwarded-For",
+				},
+			},
+			{
+				Name:      "backend",
+				Image:     "docker.io/frappe/erpnext:v15.10.0",
+				DependsOn: []string{"db", "redis-cache", "redis-queue", "redis-socketio"},
+				Requires:  []string{"db", "redis-cache", "redis-queue", "redis-socketio"},
+				Env: map[string]string{
+					"DB_HOST":                 "127.0.0.1",
+					"DB_PORT":                 "3306",
+					"FRAPPE_SITE_NAME_HEADER": "frontend",
+					"REDIS_CACHE":             "127.0.0.1:6379",
+					"REDIS_QUEUE":             "127.0.0.1:6380",
+					"REDIS_SOCKETIO":          "127.0.0.1:6381",
+				},
+				Secrets: map[string]string{"MARIADB_ROOT_PASSWORD": "secret"},
+				HealthCheck: &admiral.YAMLHealthCheck{
+					Type: "tcp",
+					Port: 8000,
+				},
+			},
+		},
+	}
+
+	if err := renderer.Render(task); err != nil {
+		t.Fatalf("render ERPNext quadlet: %v", err)
+	}
+
+	frontendData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-erpnext001-frontend.container"))
+	if err != nil {
+		t.Fatalf("read frontend container: %v", err)
+	}
+	frontend := string(frontendData)
+	if !strings.Contains(frontend, "Volume=admiral-erpnext001-shared-logs.volume:/home/frappe/frappe-bench/logs") {
+		t.Fatalf("expected logs shared volume on frontend, got %q", frontend)
+	}
+	if !strings.Contains(frontend, "Volume=admiral-erpnext001-shared-sites.volume:/home/frappe/frappe-bench/sites") {
+		t.Fatalf("expected sites shared volume on frontend, got %q", frontend)
+	}
+	if !strings.Contains(frontend, "Wants=admiral-erpnext001-backend.service") || !strings.Contains(frontend, "Wants=admiral-erpnext001-websocket.service") {
+		t.Fatalf("expected frontend wants backend and websocket, got %q", frontend)
+	}
+
+	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-erpnext001-shared-logs.volume")); err != nil {
+		t.Fatalf("expected logs shared volume file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-erpnext001-shared-sites.volume")); err != nil {
+		t.Fatalf("expected sites shared volume file: %v", err)
+	}
+}
+
 func TestRendererMakesQuadletDirTraversableForRootlessUser(t *testing.T) {
 	parent := t.TempDir()
 	quadletDir := filepath.Join(parent, "admiral")
