@@ -134,16 +134,20 @@ func (e *SystemdPodmanExecutor) podman() *podman.Inspector {
 	return insp
 }
 
-// podmanForSetup returns a copy of the podman inspector with a longer timeout
-// suitable for long-running setup_command execution.
-func (e *SystemdPodmanExecutor) podmanForSetup() *podman.Inspector {
+// podmanForSetup returns a copy of the podman inspector with a timeout
+// suitable for setup_command execution. If the requested timeout is less
+// than the default (10 minutes), the default is used.
+func (e *SystemdPodmanExecutor) podmanForSetup(timeout time.Duration) *podman.Inspector {
 	insp := e.podman()
 	if insp == nil {
 		return nil
 	}
 	clone := *insp
-	if clone.Timeout < 10*time.Minute {
-		clone.Timeout = 10 * time.Minute
+	if timeout < 10*time.Minute {
+		timeout = 10 * time.Minute
+	}
+	if clone.Timeout < timeout {
+		clone.Timeout = timeout
 	}
 	return &clone
 }
@@ -237,8 +241,8 @@ func (e *SystemdPodmanExecutor) runServiceCommandTrustedShell(ctx context.Contex
 	return e.podman().RunTrustedShellInPod(ctx, podName(instanceID), svc.Image, serviceRuntimeEnv(svc), serviceRuntimeMounts(instanceID, svc), svc.User, command)
 }
 
-func (e *SystemdPodmanExecutor) runServiceSetupTrustedShell(ctx context.Context, instanceID string, svc admiral.ServiceInfo, command string) ([]byte, error) {
-	insp := e.podmanForSetup()
+func (e *SystemdPodmanExecutor) runServiceSetupTrustedShell(ctx context.Context, instanceID string, svc admiral.ServiceInfo, command string, timeout time.Duration) ([]byte, error) {
+	insp := e.podmanForSetup(timeout)
 	if insp == nil {
 		return nil, fmt.Errorf("podman inspector is not configured")
 	}

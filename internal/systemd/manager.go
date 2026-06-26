@@ -8,7 +8,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,10 +62,20 @@ type Manager struct {
 	RunAsUser string // empty = rootful systemd; set = rootless user systemd --user
 }
 
+// defaultTimeout is the default systemd operation timeout.
+// Override via ADMIRAL_SYSTEMD_TIMEOUT environment variable (in seconds).
+const defaultTimeout = 30 * time.Second
+
 func NewManager(runner Runner) *Manager {
+	timeout := defaultTimeout
+	if s := os.Getenv("ADMIRAL_SYSTEMD_TIMEOUT"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			timeout = time.Duration(v) * time.Second
+		}
+	}
 	return &Manager{
 		Runner:  runner,
-		Timeout: 30 * time.Second,
+		Timeout: timeout,
 	}
 }
 

@@ -262,8 +262,8 @@ func (e *SystemdPodmanExecutor) writeSetupMarker(instanceID string) {
 // string comes from a trusted app definition (audited DB data), not from
 // end-user input.
 //
-// A generous timeout (10 minutes) is applied because application
-// bootstrap commands can take several minutes to complete.
+// The timeout is derived from each service's SetupTimeout field.
+// If not set, a default of 10 minutes is applied.
 func (e *SystemdPodmanExecutor) runSetupCommands(ctx context.Context, task admiral.FleetTask, hostPorts map[string]int) error {
 	servicesByName := make(map[string]admiral.ServiceInfo, len(task.Services))
 	for _, svc := range task.Services {
@@ -285,8 +285,12 @@ func (e *SystemdPodmanExecutor) runSetupCommands(ctx context.Context, task admir
 		if err := e.waitForServiceReady(ctx, task.InstanceID, svc, hostPorts); err != nil {
 			return fmt.Errorf("wait for setup service %q: %w", svc.Name, err)
 		}
-		setupCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-		out, err := e.runServiceSetupTrustedShell(setupCtx, task.InstanceID, svc, svc.SetupCommand)
+		setupTimeout := svc.SetupTimeout
+		if setupTimeout <= 0 {
+			setupTimeout = 600
+		}
+		setupCtx, cancel := context.WithTimeout(ctx, time.Duration(setupTimeout)*time.Second)
+		out, err := e.runServiceSetupTrustedShell(setupCtx, task.InstanceID, svc, svc.SetupCommand, time.Duration(setupTimeout)*time.Second)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("setup_command for service %q: %w: %s", svc.Name, err, string(out))
