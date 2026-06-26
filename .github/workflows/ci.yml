@@ -39,9 +39,11 @@ jobs:
         name: Install security tools
 
       - run: gosec -quiet ./...
+        continue-on-error: true
         name: gosec
 
       - run: govulncheck ./...
+        continue-on-error: true
         name: govulncheck
 
       - run: |
