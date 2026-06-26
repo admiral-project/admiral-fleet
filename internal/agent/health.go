@@ -104,7 +104,10 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 }
 
 func (a *Agent) detectHostPorts(instanceID string) map[string]int {
-	dataDir := "/var/lib/admiral"
+	dataDir := os.Getenv("ADMIRAL_DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/var/lib/admiral"
+	}
 	data, err := os.ReadFile(filepath.Join(dataDir, "instances", sanitizeInstanceID(instanceID), "ports.json"))
 	if err != nil {
 		return nil

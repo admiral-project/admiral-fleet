@@ -6,6 +6,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -15,26 +16,39 @@ import (
 
 func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
 	for _, unit := range deprovisionUnitNames(task) {
-		_ = e.systemd().Stop(ctx, unit)
-		_ = e.systemd().Disable(ctx, unit)
+		if err := e.systemd().Stop(ctx, unit); err != nil {
+			slog.Debug("stop unit during deprovision", "unit", unit, "error", err)
+		}
+		if err := e.systemd().Disable(ctx, unit); err != nil {
+			slog.Debug("disable unit during deprovision", "unit", unit, "error", err)
+		}
 	}
 
 	// Force-remove the pod before removing service containers and volumes.
 	if usesPod(task) {
-		_ = e.podman().RemovePod(ctx, podName(task.InstanceID))
+		if err := e.podman().RemovePod(ctx, podName(task.InstanceID)); err != nil {
+			slog.Debug("remove pod during deprovision", "instance", task.InstanceID, "error", err)
+		}
 	}
 
 	// Force-remove Podman containers and volumes
 	for _, svc := range task.Services {
 		cName := containerName(task.InstanceID, svc.Name)
-		_ = e.podman().RemoveContainer(ctx, cName)
+		if err := e.podman().RemoveContainer(ctx, cName); err != nil {
+			slog.Debug("remove container during deprovision", "container", cName, "error", err)
+		}
 		if svc.Volume != "" {
 			vName := volumeName(task.InstanceID, svc.Name)
-			_ = e.podman().RemoveVolume(ctx, vName)
+			if err := e.podman().RemoveVolume(ctx, vName); err != nil {
+				slog.Debug("remove volume during deprovision", "volume", vName, "error", err)
+			}
 		}
 	}
 	for _, shared := range task.SharedVolumes {
-		_ = e.podman().RemoveVolume(ctx, sharedVolumeName(task.InstanceID, shared.Name))
+		vName := sharedVolumeName(task.InstanceID, shared.Name)
+		if err := e.podman().RemoveVolume(ctx, vName); err != nil {
+			slog.Debug("remove shared volume during deprovision", "volume", vName, "error", err)
+		}
 	}
 
 	// Remove Podman secrets before Quadlet files so the secret names
@@ -55,7 +69,9 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 	}
 
 	// Reset failed systemd states
-	_ = e.systemd().ResetFailed(ctx)
+	if err := e.systemd().ResetFailed(ctx); err != nil {
+		slog.Debug("reset failed systemd during deprovision", "instance", task.InstanceID, "error", err)
+	}
 
 	// Clean up instance data dir (ports.json, env files)
 	dataDir := e.DataDir
