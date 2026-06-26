@@ -303,7 +303,7 @@ func (i *Inspector) RemoveVolume(ctx context.Context, name string) error {
 // Using --replace makes this idempotent: if the secret already exists,
 // it is replaced silently.
 func (i *Inspector) SecretCreate(ctx context.Context, name, value string) error {
-	_, err := i.runWithStdin(ctx, strings.NewReader(value), "secret", "create", "--replace", name, "-")
+	_, err := i.runSecretWithStdin(ctx, strings.NewReader(value), "create", "--replace", name, "-")
 	if err != nil {
 		return fmt.Errorf("create podman secret %q: %w", name, err)
 	}
@@ -313,8 +313,38 @@ func (i *Inspector) SecretCreate(ctx context.Context, name, value string) error 
 // SecretRemove removes a Podman secret by name.
 // Errors are returned as-is (caller should ignore not-found if idempotency is desired).
 func (i *Inspector) SecretRemove(ctx context.Context, name string) error {
-	_, err := i.run(ctx, "secret", "rm", name)
+	_, err := i.runSecretWithStdin(ctx, nil, "rm", name)
 	return err
+}
+
+func (i *Inspector) runSecretWithStdin(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+	timeout := i.Timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	secretArgs := append([]string{"secret"}, args...)
+	if i.RootlessUser != "" {
+		return i.runAsUserSystemdUserSession(runCtx, stdin, secretArgs...)
+	}
+
+	runner := i.Runner
+	if runner == nil {
+		runner = CommandRunner{}
+	}
+	cr, ok := runner.(*CommandRunner)
+	if ok {
+		return cr.runWithStdin(runCtx, stdin, "podman", secretArgs...)
+	}
+	if stdin != nil {
+		if runnerWithStdin, ok := runner.(stdinRunner); ok {
+			return runnerWithStdin.RunWithStdin(runCtx, stdin, "podman", secretArgs...)
+		}
+		return nil, fmt.Errorf("runner %T does not support stdin", runner)
+	}
+	return runner.Run(runCtx, "podman", secretArgs...)
 }
 
 func (i *Inspector) PodPause(ctx context.Context, podName string) error {
@@ -413,7 +443,7 @@ func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, arg
 	// Use runuser to run podman as the rootless user, with XDG_RUNTIME_DIR set
 	// so podman can find the user's runtime directory (rootless containers).
 	// This path is safe for commands that don't interact with Quadlet cgroups
-	// (e.g. podman secret create, podman pod exists, podman container exists).
+	// (e.g. podman pod exists, podman container exists).
 
 	// We MUST NOT sanitize here, because this is the WRAPPER.
 	// The ACTUAL runner (CommandRunner) will sanitize the final arguments.
@@ -476,6 +506,52 @@ func (i *Inspector) runAsUserSystemdSession(ctx context.Context, stdin io.Reader
 	return runner.Run(ctx, "systemd-run", sdrunArgs...)
 }
 
+// runAsUserSystemdUserSession starts a transient user-manager unit in the
+// rootless user's own systemd session. This keeps podman secret operations
+// attached to the rootless runtime and avoids the admiral-fleet.service
+// sandbox edge cases observed with direct runuser invocation.
+func (i *Inspector) runAsUserSystemdUserSession(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+	u, err := user.Lookup(i.RootlessUser)
+	if err != nil {
+		return nil, fmt.Errorf("lookup rootless user %q: %w", i.RootlessUser, err)
+	}
+	xdgRuntimeDir := filepath.Join("/run/user", u.Uid)
+	dbusSessionBus := filepath.Join(xdgRuntimeDir, "bus")
+
+	systemdArgs := append([]string{
+		"--user",
+		"--wait",
+		"--collect",
+		"--pipe",
+		"--",
+		"podman",
+	}, args...)
+
+	runner := i.Runner
+	if runner == nil {
+		runner = CommandRunner{}
+	}
+	runuserArgs := append([]string{
+		"-u", i.RootlessUser, "--",
+		"env",
+		"XDG_RUNTIME_DIR=" + xdgRuntimeDir,
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + dbusSessionBus,
+		"systemd-run",
+	}, systemdArgs...)
+
+	cr, ok := runner.(*CommandRunner)
+	if ok {
+		return cr.runWithStdin(ctx, stdin, "runuser", runuserArgs...)
+	}
+	if stdin != nil {
+		if runnerWithStdin, ok := runner.(stdinRunner); ok {
+			return runnerWithStdin.RunWithStdin(ctx, stdin, "runuser", runuserArgs...)
+		}
+		return nil, fmt.Errorf("runner %T does not support stdin", runner)
+	}
+	return runner.Run(ctx, "runuser", runuserArgs...)
+}
+
 func (i *Inspector) runAsUserWithStdinTrusted(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
 	// Detect if this is an exec operation that needs the user's systemd
 	// session for cgroup access. Quadlet containers use systemd cgroup
@@ -489,7 +565,7 @@ func (i *Inspector) runAsUserWithStdinTrusted(ctx context.Context, stdin io.Read
 	// Use runuser to run podman as the rootless user, with XDG_RUNTIME_DIR set
 	// so podman can find the user's runtime directory (rootless containers).
 	// This path is safe for commands that don't interact with Quadlet cgroups
-	// (e.g. podman run --rm --pod for healthchecks, podman secret create).
+	// (e.g. podman run --rm --pod for healthchecks).
 	u, err := user.Lookup(i.RootlessUser)
 	if err != nil {
 		return nil, fmt.Errorf("lookup rootless user %q: %w", i.RootlessUser, err)

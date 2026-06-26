@@ -341,3 +341,64 @@ func TestInspectorUsesRunuserForRootlessPodman(t *testing.T) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
 	}
 }
+
+func TestInspectorUsesUserBusForRootlessSecrets(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+	currentUser, err := user.Current()
+	if err != nil {
+		t.Fatalf("current user: %v", err)
+	}
+	inspector.RootlessUser = currentUser.Username
+
+	if err := inspector.SecretCreate(context.Background(), "demo-secret", "super-secret"); err != nil {
+		t.Fatalf("secret create: %v", err)
+	}
+	if err := inspector.SecretRemove(context.Background(), "demo-secret"); err != nil {
+		t.Fatalf("secret remove: %v", err)
+	}
+
+	expected := []call{
+		{
+			name: "runuser",
+			args: []string{
+				"-u", currentUser.Username, "--",
+				"env",
+				"XDG_RUNTIME_DIR=/run/user/" + currentUser.Uid,
+				"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/" + currentUser.Uid + "/bus",
+				"systemd-run",
+				"--user",
+				"--wait",
+				"--collect",
+				"--pipe",
+				"--",
+				"podman",
+				"secret", "create", "--replace", "demo-secret", "-",
+			},
+		},
+		{
+			name: "runuser",
+			args: []string{
+				"-u", currentUser.Username, "--",
+				"env",
+				"XDG_RUNTIME_DIR=/run/user/" + currentUser.Uid,
+				"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/" + currentUser.Uid + "/bus",
+				"systemd-run",
+				"--user",
+				"--wait",
+				"--collect",
+				"--pipe",
+				"--",
+				"podman",
+				"secret", "rm", "demo-secret",
+			},
+		},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+	if len(runner.stdin) != 1 || runner.stdin[0] != "super-secret" {
+		t.Fatalf("unexpected stdin payloads: %#v", runner.stdin)
+	}
+}

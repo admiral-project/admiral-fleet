@@ -168,6 +168,31 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 				)
 				return result
 			}
+			for _, unit := range unitNames(task) {
+				slog.Info("provision: restarting unit after setup", "instance", task.InstanceID, "unit", unit)
+				if err := e.systemd().Restart(ctx, unit); err != nil {
+					result.Success = false
+					result.Error = fmt.Sprintf("restart unit %q after setup: %v", unit, err)
+					result.Logs = fmt.Sprintf("restart unit %s after setup failed for instance %s: %v", unit, task.InstanceID, err)
+					result.Metadata = fmt.Sprintf(
+						`{"executor":"systemd-podman","action":"provision_app","host_ports":%s,"has_setup":true,"setup_failed":true,"setup_error":%q}`,
+						string(hostPortsJSON), err.Error(),
+					)
+					return result
+				}
+			}
+			for _, svc := range task.Services {
+				if err := e.waitForServiceReady(ctx, task.InstanceID, svc, hostPorts); err != nil {
+					result.Success = false
+					result.Error = fmt.Sprintf("wait for service %q after setup restart: %v", svc.Name, err)
+					result.Logs = fmt.Sprintf("service %s was not ready after setup restart for instance %s: %v", svc.Name, task.InstanceID, err)
+					result.Metadata = fmt.Sprintf(
+						`{"executor":"systemd-podman","action":"provision_app","host_ports":%s,"has_setup":true,"setup_failed":true,"setup_error":%q}`,
+						string(hostPortsJSON), err.Error(),
+					)
+					return result
+				}
+			}
 			e.writeSetupMarker(task.InstanceID)
 		}
 	}
@@ -248,7 +273,7 @@ func (e *SystemdPodmanExecutor) runSetupCommands(ctx context.Context, task admir
 		if strings.TrimSpace(svc.SetupCommand) == "" {
 			continue
 		}
-		for _, depName := range svc.DependsOn {
+		for _, depName := range setupDependencyNames(svc) {
 			depSvc, ok := servicesByName[depName]
 			if !ok {
 				continue
@@ -268,6 +293,26 @@ func (e *SystemdPodmanExecutor) runSetupCommands(ctx context.Context, task admir
 		}
 	}
 	return nil
+}
+
+func setupDependencyNames(svc admiral.ServiceInfo) []string {
+	seen := make(map[string]struct{}, len(svc.DependsOn)+len(svc.Requires))
+	names := make([]string, 0, len(svc.DependsOn)+len(svc.Requires))
+	for _, depName := range svc.Requires {
+		if _, ok := seen[depName]; ok {
+			continue
+		}
+		seen[depName] = struct{}{}
+		names = append(names, depName)
+	}
+	for _, depName := range svc.DependsOn {
+		if _, ok := seen[depName]; ok {
+			continue
+		}
+		seen[depName] = struct{}{}
+		names = append(names, depName)
+	}
+	return names
 }
 
 func (e *SystemdPodmanExecutor) waitForServiceReady(ctx context.Context, instanceID string, svc admiral.ServiceInfo, hostPorts map[string]int) error {

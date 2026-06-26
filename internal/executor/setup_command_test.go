@@ -397,6 +397,7 @@ func TestProvisionSetupCommandWaitsForDependenciesToBeReady(t *testing.T) {
 				Image:        "example.com/app:1",
 				Port:         8000,
 				DependsOn:    []string{"db"},
+				Requires:     []string{"db"},
 				SetupCommand: "app bootstrap",
 				HealthCheck: &admiral.YAMLHealthCheck{
 					Type:    "command",
@@ -432,6 +433,35 @@ func TestProvisionSetupCommandWaitsForDependenciesToBeReady(t *testing.T) {
 	}
 	if !foundDependencyCheck || !foundSetupExec {
 		t.Fatalf("expected dependency readiness checks and setup helper run, calls: %#v", podmanRunner.calls)
+	}
+	foundRestart := false
+	for _, call := range systemdRunner.calls {
+		if len(call) >= 2 && call[0] == "systemctl" && call[1] == "restart" && strings.Contains(strings.Join(call, " "), "admiral-racedemo-pod.service") {
+			foundRestart = true
+			break
+		}
+	}
+	if !foundRestart {
+		t.Fatalf("expected pod restart after setup, systemd calls: %#v", systemdRunner.calls)
+	}
+}
+
+func TestSetupDependencyNamesDeduplicatesRequiresAndDependsOn(t *testing.T) {
+	svc := admiral.ServiceInfo{
+		Name:      "backend",
+		Requires:  []string{"db", "redis"},
+		DependsOn: []string{"db", "queue"},
+	}
+
+	got := setupDependencyNames(svc)
+	want := []string{"db", "redis", "queue"}
+	if len(got) != len(want) {
+		t.Fatalf("setupDependencyNames() len=%d, want %d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("setupDependencyNames()[%d]=%q, want %q (full=%#v)", i, got[i], want[i], got)
+		}
 	}
 }
 
