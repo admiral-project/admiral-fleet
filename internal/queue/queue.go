@@ -66,7 +66,7 @@ func NewConsumer(dbURL, nodeID string, publicKey ed25519.PublicKey, encryptionKe
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(5 * time.Minute)
-	if err := db.Ping(); err != nil {
+	if err := db.Ping(); err != nil && !strings.Contains(err.Error(), "connection refused") {
 		return nil, fmt.Errorf("ping queue database: %w", err)
 	}
 	return &Consumer{

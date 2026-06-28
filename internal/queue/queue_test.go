@@ -4,6 +4,14 @@
 package queue
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 )
@@ -37,11 +45,135 @@ func TestVerifyTaskNoKey(t *testing.T) {
 	}
 }
 
+func TestVerifyTask(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	c := &Consumer{publicKey: pub}
+
+	payload := []byte("test-payload")
+	signedAt := time.Now().Unix()
+	msg := append(payload, []byte(fmt.Sprintf("%d", signedAt))...)
+	sig := ed25519.Sign(priv, msg)
+
+	tests := []struct {
+		name    string
+		cmd     *claimedCommand
+		wantErr bool
+	}{
+		{
+			name: "valid signature",
+			cmd: &claimedCommand{
+				id:         "t1",
+				signature:  hex.EncodeToString(sig),
+				signedAt:   signedAt,
+				rawPayload: payload,
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid signature",
+			cmd: &claimedCommand{
+				id:         "t1",
+				signature:  hex.EncodeToString(make([]byte, 64)),
+				signedAt:   signedAt,
+				rawPayload: payload,
+			},
+			wantErr: true,
+		},
+		{
+			name: "expired task",
+			cmd: &claimedCommand{
+				id:         "t1",
+				signature:  hex.EncodeToString(sig),
+				signedAt:   time.Now().Add(-10 * time.Minute).Unix(),
+				rawPayload: payload,
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing signature",
+			cmd: &claimedCommand{
+				id: "t1",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := c.verifyTask(tt.cmd)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("verifyTask() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestOpenPayloadNoKey(t *testing.T) {
 	c := &Consumer{}
 	_, err := c.openPayload("anything")
 	if err == nil {
 		t.Fatal("expected error when no encryption key")
+	}
+}
+
+func TestOpenPayload(t *testing.T) {
+	key := make([]byte, 32)
+	io.ReadFull(rand.Reader, key)
+	c := &Consumer{encryptionKey: key}
+
+	plaintext := []byte("secret message")
+	block, _ := aes.NewCipher(key)
+	gcm, _ := cipher.NewGCM(block)
+	nonce := make([]byte, gcm.NonceSize())
+	io.ReadFull(rand.Reader, nonce)
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+	b64 := base64.StdEncoding.EncodeToString(ciphertext)
+
+	tests := []struct {
+		name    string
+		input   string
+		want    []byte
+		wantErr bool
+	}{
+		{"valid", b64, plaintext, false},
+		{"invalid base64", "!!!", nil, true},
+		{"too short", base64.StdEncoding.EncodeToString(make([]byte, 1)), nil, true},
+		{"wrong key", b64, nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldKey := c.encryptionKey
+			if tt.name == "wrong key" {
+				c.encryptionKey = make([]byte, 32)
+			}
+			got, err := c.openPayload(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("openPayload() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && string(got) != string(tt.want) {
+				t.Errorf("openPayload() = %q, want %q", got, tt.want)
+			}
+			c.encryptionKey = oldKey
+		})
+	}
+}
+
+func TestNewConsumerValidation(t *testing.T) {
+	tests := []struct {
+		url     string
+		wantErr bool
+	}{
+		{"postgres://user:pass@localhost/db?sslmode=require", false},
+		{"postgres://user:pass@localhost/db?sslmode=disable", true},
+		{"postgres://user:pass@localhost/db", true},
+	}
+
+	for _, tt := range tests {
+		_, err := NewConsumer(tt.url, "node1", nil, nil)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("NewConsumer(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
+		}
 	}
 }
 
