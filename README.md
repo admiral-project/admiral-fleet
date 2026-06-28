@@ -61,6 +61,50 @@ admiral-fleet
 - `systemd-podman` (production) — generates Quadlet `.pod`, `.container`, and `.volume` files, managed via systemd
 - `simulated` (development only) — logs actions without executing them
 
+## Rootless Execution & System Integration
+
+`admiral-fleet` is designed for strict rootless operation. To achieve this while maintaining full control over workloads, it interacts with several system components using specific mechanisms.
+
+### System Commands
+
+The agent invokes the following commands on the host:
+
+| Command | Purpose |
+|---------|---------|
+| `loginctl enable-linger <user>` | Ensures the user session and its systemd manager stay active after logout. |
+| `systemctl start systemd-machined` | Ensures the `machined` service is active to support the `--machine` transport. |
+| `systemd-run --machine=<user>@ --user` | Executes `systemctl` or `podman` commands within the rootless user's systemd manager. This is required for correct cgroup management. |
+| `runuser -u <user> -- env XDG_RUNTIME_DIR=/run/user/<uid> podman` | Executes `podman` commands as the rootless user when systemd-specific cgroup access is not required (e.g., volume inspections). |
+| `podman secret` | Manages sensitive data in the Podman internal secret store, which is then injected into containers via Quadlet `Secret=` keys. |
+
+### Quadlet Files
+
+Quadlet files are generated in the directory specified by `ADMIRAL_FLEET_QUADLET_DIR`. By default, if `ADMIRAL_FLEET_ROOTLESS_USER` is set, this path is automatically adjusted to:
+
+`/etc/containers/systemd/users/<UID>/admiral/`
+
+Generated files include:
+- `admiral-<instance>.pod`: Defines the Podman pod and shared resource limits (CPU/Memory).
+- `admiral-<instance>-<service>.container`: Defines each service container, linked to the pod.
+- `admiral-<instance>-<volume>.volume`: Defines named volumes for persistence.
+
+### Permissions & Capabilities
+
+To maintain rootless integrity, the following permissions are enforced:
+
+- **Data Directory (`/var/lib/admiral`)**: Mode `0751`. Subdirectories like `instances` and `backups` use `0700` or `0750` to ensure only the rootless user and the agent can access them.
+- **Quadlet Directory**: Mode `0755`. Must be readable by the rootless user's systemd generator.
+- **Environment Files**: Mode `0600`. Contains sensitive environment variables for containers.
+- **Temporary Env Files**: Mode `0600`. Created during `podman exec` operations to avoid leaking secrets in the process list.
+
+### Cgroup Management Hacks
+
+Standard `runuser` or `sudo` do not grant access to the user's systemd cgroup hierarchy. Admiral uses the `--machine` transport of `systemd-run` to bridge this gap:
+
+1. **Lingering**: Enabled via `loginctl` to ensure the user's `systemd --user` instance is always running.
+2. **Machine Transport**: Commands like `systemctl --user daemon-reload` are wrapped in `systemd-run --machine=<user>@ --user` so they execute within the correct D-Bus and cgroup context of the rootless user.
+3. **XDG_RUNTIME_DIR**: Manually exported when using `runuser` to ensure `podman` can locate the user's rootless storage and Unix sockets.
+
 ## Requirements
 
 - Podman >= 5 with Quadlet `.pod` support
