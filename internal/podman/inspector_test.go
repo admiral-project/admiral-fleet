@@ -5,6 +5,7 @@ package podman
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os/user"
 	"reflect"
@@ -21,10 +22,14 @@ type call struct {
 type fakeRunner struct {
 	calls []call
 	stdin []string
+	err   error
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, call{name: name, args: append([]string(nil), args...)})
+	if r.err != nil {
+		return nil, r.err
+	}
 	return []byte("ok"), nil
 }
 
@@ -33,6 +38,9 @@ func (r *fakeRunner) RunWithStdin(_ context.Context, stdin io.Reader, name strin
 	if stdin != nil {
 		data, _ := io.ReadAll(stdin)
 		r.stdin = append(r.stdin, string(data))
+	}
+	if r.err != nil {
+		return nil, r.err
 	}
 	return []byte("ok"), nil
 }
@@ -178,6 +186,31 @@ func TestInspectorRunTrustedShellInPodUsesContainerUser(t *testing.T) {
 	}
 }
 
+func TestInspectorRunTrustedInPodNoEntrypoint(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	if _, err := inspector.RunTrustedInPodNoEntrypoint(context.Background(), "pod1", "img1", nil, nil, "1001", "echo", "hi"); err != nil {
+		t.Fatalf("RunTrustedInPodNoEntrypoint: %v", err)
+	}
+
+	expected := []call{
+		{
+			name: "podman",
+			args: []string{
+				"run", "--rm", "--pod", "pod1",
+				"--user", "1001",
+				"--entrypoint", "",
+				"img1", "echo", "hi",
+			},
+		},
+	}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
 func TestInspectorVolumeMethods(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)
@@ -221,6 +254,22 @@ func TestInspectorContainerMethods(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestInspectorErrorPropagation(t *testing.T) {
+	wantErr := errors.New("podman failure")
+	runner := &fakeRunner{err: wantErr}
+	inspector := NewInspector(runner)
+
+	if err := inspector.PodExists(context.Background(), "p1"); !errors.Is(err, wantErr) {
+		t.Errorf("PodExists error = %v, want %v", err, wantErr)
+	}
+	if _, err := inspector.ContainerInspect(context.Background(), "c1"); !errors.Is(err, wantErr) {
+		t.Errorf("ContainerInspect error = %v, want %v", err, wantErr)
+	}
+	if _, err := inspector.VolumeInspect(context.Background(), "v1"); !errors.Is(err, wantErr) {
+		t.Errorf("VolumeInspect error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -400,5 +449,18 @@ func TestInspectorUsesUserBusForRootlessSecrets(t *testing.T) {
 	}
 	if len(runner.stdin) != 1 || runner.stdin[0] != "super-secret" {
 		t.Fatalf("unexpected stdin payloads: %#v", runner.stdin)
+	}
+}
+
+func TestInspectorSecretMethodsErrorCases(t *testing.T) {
+	wantErr := errors.New("secret error")
+	runner := &fakeRunner{err: wantErr}
+	inspector := NewInspector(runner)
+
+	if err := inspector.SecretCreate(context.Background(), "s1", "v1"); !errors.Is(err, wantErr) {
+		t.Errorf("SecretCreate error = %v, want %v", err, wantErr)
+	}
+	if err := inspector.SecretRemove(context.Background(), "s1"); !errors.Is(err, wantErr) {
+		t.Errorf("SecretRemove error = %v, want %v", err, wantErr)
 	}
 }

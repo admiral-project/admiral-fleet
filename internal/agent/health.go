@@ -108,7 +108,7 @@ func (a *Agent) detectHostPorts(instanceID string) map[string]int {
 	if dataDir == "" {
 		dataDir = "/var/lib/admiral"
 	}
-	data, err := os.ReadFile(filepath.Join(dataDir, "instances", sanitizeInstanceID(instanceID), "ports.json"))
+	data, err := os.ReadFile(filepath.Join(dataDir, "instances", sanitizeInstanceID(instanceID), "ports.json")) // #nosec G304 -- path is sanitized and follows controlled structure
 	if err != nil {
 		return nil
 	}

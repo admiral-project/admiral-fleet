@@ -6,6 +6,7 @@ package systemd
 import (
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -35,6 +36,10 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 		}
 	}
 	return []byte("ok"), nil
+}
+
+func (r *fakeRunner) RunWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
+	return r.Run(ctx, name, args...)
 }
 
 func TestManagerUsesSystemctlArgumentArrays(t *testing.T) {
@@ -200,5 +205,31 @@ func TestManagerRootlessDaemonReloadEnablesLingerOnce(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestEncryptCred(t *testing.T) {
+	runner := &fakeRunner{}
+	ctx := context.Background()
+	stdin := strings.NewReader("secret")
+	err := EncryptCred(ctx, runner, "my-cred", stdin, "/tmp/out.cred")
+	if err != nil {
+		t.Fatalf("EncryptCred: %v", err)
+	}
+
+	expected := call{name: "systemd-creds", args: []string{"encrypt", "--name=my-cred", "-", "/tmp/out.cred"}}
+	if !reflect.DeepEqual(runner.calls[0], expected) {
+		t.Fatalf("unexpected call: %#v", runner.calls[0])
+	}
+}
+
+func TestCredPathHelpers(t *testing.T) {
+	dir := CredDir("/var/lib/admiral", "inst1")
+	if dir != "/var/lib/admiral/instances/inst1/creds" {
+		t.Errorf("CredDir: %s", dir)
+	}
+	path := CredFilePath("/var/lib/admiral", "inst1", "svc1", "PASS")
+	if path != "/var/lib/admiral/instances/inst1/creds/svc1-PASS.cred" {
+		t.Errorf("CredFilePath: %s", path)
 	}
 }

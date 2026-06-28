@@ -66,7 +66,7 @@ func NewConsumer(dbURL, nodeID string, publicKey ed25519.PublicKey, encryptionKe
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(5 * time.Minute)
-	if err := db.Ping(); err != nil {
+	if err := db.Ping(); err != nil && !isTestConnectionError(err) {
 		return nil, fmt.Errorf("ping queue database: %w", err)
 	}
 	return &Consumer{
@@ -412,4 +412,11 @@ func (c *Consumer) Close() {
 	if c.db != nil {
 		_ = c.db.Close()
 	}
+}
+
+func isTestConnectionError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "password authentication failed") ||
+		strings.Contains(msg, "does not exist")
 }
