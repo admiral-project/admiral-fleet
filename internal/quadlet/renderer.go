@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
+
+var sensitiveEnvPattern = regexp.MustCompile(`(?i)(SECRET|PASSWORD|TOKEN|KEY|CREDENTIAL)`)
 
 type Renderer struct {
 	QuadletDir string
@@ -65,7 +68,11 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 			}
 		}
 		envPath := filepath.Join(envDir, svc.Name+".env")
-		if err := writeFile(envPath, renderEnv(svc), 0600); err != nil {
+		envContent, err := renderEnv(svc)
+		if err != nil {
+			return err
+		}
+		if err := writeFile(envPath, envContent, 0600); err != nil {
 			return err
 		}
 		if err := writeFile(filepath.Join(r.QuadletDir, ContainerFileName(task.InstanceID, svc.Name)), r.renderContainer(task.InstanceID, svc, envPath), 0644); err != nil {
@@ -299,10 +306,17 @@ func renderSharedVolume(instanceID, volumeName, target string) string {
 	return b.String()
 }
 
-func renderEnv(svc admiral.ServiceInfo) string {
+func isSensitiveEnvName(name string) bool {
+	return sensitiveEnvPattern.MatchString(name)
+}
+
+func renderEnv(svc admiral.ServiceInfo) (string, error) {
 	keys := make([]string, 0, len(svc.Env))
 	values := make(map[string]string, len(svc.Env))
 	for k, v := range svc.Env {
+		if isSensitiveEnvName(k) {
+			return "", fmt.Errorf("env var %q has a sensitive name; use svc.Secrets instead of svc.Env for secrets", k)
+		}
 		keys = append(keys, k)
 		values[k] = v
 	}
@@ -312,7 +326,7 @@ func renderEnv(svc admiral.ServiceInfo) string {
 	for _, k := range keys {
 		fmt.Fprintf(&b, "%s=%s\n", k, sanitizeEnvValue(values[k]))
 	}
-	return b.String()
+	return b.String(), nil
 }
 
 func sanitizeQuadletValue(value string) string {
