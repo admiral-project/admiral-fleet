@@ -6,6 +6,8 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,18 +31,28 @@ type Agent struct {
 	StorageExceededAction string
 	RootlessUser          string
 	QuadletDir            string
+	taskPublicKey         ed25519.PublicKey
 	executor              executor.Executor
 	http                  *http.Client
 	outbox                *outbox
 }
 
-func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir string, exec executor.Executor) (*Agent, error) {
+func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir, taskPublicKeyHex string, exec executor.Executor) (*Agent, error) {
 	if err := tlsconfig.ValidateURLScheme(apiURL, "https"); err != nil {
 		return nil, err
 	}
 	clientTLSConfig, err := tlsconfig.NewClientConfig(caCertFile)
 	if err != nil {
 		return nil, err
+	}
+
+	var taskPublicKey ed25519.PublicKey
+	if taskPublicKeyHex != "" {
+		keyBytes, err := hex.DecodeString(taskPublicKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("parse task public key: %w", err)
+		}
+		taskPublicKey = ed25519.PublicKey(keyBytes)
 	}
 
 	return &Agent{
@@ -51,6 +63,7 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 		StorageExceededAction: storageExceededAction,
 		RootlessUser:          rootlessUser,
 		QuadletDir:            quadletDir,
+		taskPublicKey:         taskPublicKey,
 		executor:              exec,
 		http: &http.Client{
 			Timeout: 10 * time.Second,
@@ -102,7 +115,35 @@ func (a *Agent) ClaimTask() (*admiral.FleetTask, string, error) {
 		return nil, "", fmt.Errorf("invalid claim response: missing command_id or task")
 	}
 
+	if a.taskPublicKey != nil && result.Task != nil && result.Task.TaskSignature != "" {
+		if err := verifyTaskSignature(result.Task, a.taskPublicKey); err != nil {
+			return nil, "", fmt.Errorf("task verification failed: %w", err)
+		}
+	}
+
 	return result.Task, result.CommandID, nil
+}
+
+func verifyTaskSignature(task *admiral.FleetTask, publicKey ed25519.PublicKey) error {
+	sig, err := hex.DecodeString(task.TaskSignature)
+	if err != nil {
+		return fmt.Errorf("decode task signature: %w", err)
+	}
+
+	verifyTask := *task
+	verifyTask.TaskSignature = ""
+	verifyTask.SignedAt = 0
+	payload, err := json.Marshal(verifyTask)
+	if err != nil {
+		return fmt.Errorf("marshal task for verification: %w", err)
+	}
+
+	signedAt := task.SignedAt
+	msg := append(payload, []byte(fmt.Sprintf("%d", signedAt))...)
+	if !ed25519.Verify(publicKey, msg, sig) {
+		return fmt.Errorf("task signature verification failed")
+	}
+	return nil
 }
 
 // ReportRunning notifies admirald that a claimed task has started execution.

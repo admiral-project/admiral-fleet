@@ -26,7 +26,7 @@ func main() {
 	}
 
 	exec := buildExecutor(cfg)
-	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.FleetToken, cfg.APICACertFile, cfg.CallbackOutbox, cfg.StorageCheckInterval, cfg.StorageExceededAction, cfg.RootlessUser, cfg.QuadletDir, exec)
+	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.FleetToken, cfg.APICACertFile, cfg.CallbackOutbox, cfg.StorageCheckInterval, cfg.StorageExceededAction, cfg.RootlessUser, cfg.QuadletDir, cfg.TaskPublicKey, exec)
 	if err != nil {
 		slog.Error("agent configuration error", "error", err)
 		os.Exit(1)
