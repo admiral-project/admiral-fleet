@@ -14,6 +14,8 @@ type FleetTask struct {
 	Restore        *RestoreTaskInfo
 	Storage        *StorageConfig
 	SetupCompleted bool
+	TaskSignature  string
+	SignedAt       int64
 }
 
 type TaskAction string
