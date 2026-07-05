@@ -26,6 +26,9 @@ jobs:
       - run: go mod edit -replace github.com/admiral-project/admiral/admirald=./admirald
         name: Fix replace for CI
 
+      - run: go mod tidy
+        name: Tidy modules
+
       - run: test -z "$(go fmt ./...)"
         name: Check gofmt
 
