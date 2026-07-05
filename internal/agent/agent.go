@@ -87,7 +87,7 @@ func (a *Agent) ClaimTask() (*admiral.FleetTask, string, error) {
 		return nil, "", fmt.Errorf("create claim request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Admiral-Token", a.FleetToken)
+	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
 
 	resp, err := a.http.Do(req)
 	if err != nil {
@@ -152,7 +152,7 @@ func (a *Agent) ReportRunning(commandID string) error {
 	if err != nil {
 		return fmt.Errorf("create running request: %w", err)
 	}
-	req.Header.Set("X-Admiral-Token", a.FleetToken)
+	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
 
 	resp, err := a.http.Do(req)
 	if err != nil {
@@ -171,7 +171,7 @@ func (a *Agent) RenewLease(commandID string) error {
 	if err != nil {
 		return fmt.Errorf("create renew-lease request: %w", err)
 	}
-	req.Header.Set("X-Admiral-Token", a.FleetToken)
+	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
 
 	resp, err := a.http.Do(req)
 	if err != nil {
@@ -266,7 +266,7 @@ func (a *Agent) postStorage(report admiral.StorageReport) error {
 		return fmt.Errorf("create storage request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Admiral-Token", a.FleetToken)
+	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
 
 	resp, err := a.http.Do(req)
 	if err != nil {
@@ -334,15 +334,20 @@ func (a *Agent) warnIfNoBackupStorage() {
 }
 
 // FetchTaskEncryptionKey retrieves the shared AES-256-GCM task encryption key
-// from admirald. The request is authenticated with the per-node fleet token.
-// This is called at startup when the key is not set in the local environment,
-// eliminating the need for out-of-band distribution via Ansible.
+// from admirald over the network. The request is authenticated with the
+// per-node fleet token.
+//
+// This is a network fallback for environments where the key cannot be
+// distributed via environment variable. Prefer setting
+// ADMIRAL_TASK_ENCRYPTION_KEY in the fleet environment to avoid sending
+// the key over the network.
 func (a *Agent) FetchTaskEncryptionKey() (string, error) {
+	slog.Warn("fetching task encryption key over network; prefer ADMIRAL_TASK_ENCRYPTION_KEY in local environment")
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, a.APIURL+"/api/v1/nodes/task-encryption-key", nil)
 	if err != nil {
 		return "", fmt.Errorf("create task-encryption-key request: %w", err)
 	}
-	req.Header.Set("X-Admiral-Token", a.FleetToken)
+	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
 
 	resp, err := a.http.Do(req)
 	if err != nil {
@@ -377,7 +382,7 @@ func (a *Agent) send(result admiral.TaskResult) error {
 		return fmt.Errorf("create callback request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Admiral-Token", a.FleetToken)
+	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
 
 	resp, err := a.http.Do(req)
 	if err != nil {

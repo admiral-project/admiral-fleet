@@ -28,6 +28,7 @@ type Config struct {
 	StorageExceededAction string
 	RootlessUser          string // required: Admiral only supports rootless workloads
 	TaskPublicKey         string // hex-encoded ed25519 public key for task signature verification
+	TaskEncryptionKey     string // AES-256-GCM key for decrypting task payloads; prefer this over FetchTaskEncryptionKey
 }
 
 func Load() (*Config, error) {
@@ -47,6 +48,7 @@ func Load() (*Config, error) {
 		StorageExceededAction: getEnv("ADMIRAL_FLEET_STORAGE_EXCEEDED_ACTION", "report_only"),
 		RootlessUser:          os.Getenv("ADMIRAL_FLEET_ROOTLESS_USER"),
 		TaskPublicKey:         os.Getenv("ADMIRAL_TASK_PUBLIC_KEY"),
+		TaskEncryptionKey:     os.Getenv("ADMIRAL_TASK_ENCRYPTION_KEY"),
 	}
 
 	if cfg.RootlessUser != "" {
