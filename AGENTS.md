@@ -20,3 +20,15 @@ Estado actual:
 - el camino de producción es `SystemdPodmanExecutor`.
 - el camino de pruebas sigue siendo `SimulatedExecutor`.
 - la cola duradera de tareas usa PostgreSQL.
+
+## Pre-commit
+
+Ejecutar estos comandos antes de cada commit:
+
+```bash
+go mod tidy
+gofmt -w .
+go vet ./...
+go build ./...
+go test ./...
+```
