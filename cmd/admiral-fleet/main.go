@@ -13,7 +13,6 @@ import (
 	"github.com/admiral-project/admiral/admiral-fleet/internal/agent"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/config"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/executor"
-	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
 func main() {

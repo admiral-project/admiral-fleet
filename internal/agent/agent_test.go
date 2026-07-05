@@ -18,14 +18,14 @@ import (
 )
 
 func TestNewAgentInvalidURL(t *testing.T) {
-	_, err := New("node_1", "http://insecure", "token", "", "/tmp/outbox", "", "", "", "", nil)
+	_, err := New("node_1", "http://insecure", "token", "", "/tmp/outbox", "", "", "", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error for non-https URL")
 	}
 }
 
 func TestNewAgentInvalidURLPlainHTTP(t *testing.T) {
-	_, err := New("node_1", "http://example.com/api", "token", "", "/tmp/outbox", "", "", "", "", nil)
+	_, err := New("node_1", "http://example.com/api", "token", "", "/tmp/outbox", "", "", "", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error for http URL")
 	}
@@ -34,7 +34,7 @@ func TestNewAgentInvalidURLPlainHTTP(t *testing.T) {
 func TestHandleTaskSendsResult(t *testing.T) {
 	var sent admiral.TaskResult
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Admiral-Token") != "test-token" {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -48,7 +48,7 @@ func TestHandleTaskSendsResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ag, err := New("node_1", server.URL, "test-token", "", t.TempDir(), "", "", "", "", executorWrapper{})
+	ag, err := New("node_1", server.URL, "test-token", "", t.TempDir(), "", "", "", "", "", executorWrapper{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestSendCallback(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ag, err := New("node_1", server.URL, "token", "", t.TempDir(), "", "", "", "", executorWrapper{})
+	ag, err := New("node_1", server.URL, "token", "", t.TempDir(), "", "", "", "", "", executorWrapper{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestSendCallback(t *testing.T) {
 func TestPostStorage(t *testing.T) {
 	var got admiral.StorageReport
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Admiral-Token") != "tok" {
+		if r.Header.Get("Authorization") != "Bearer tok" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -483,7 +483,7 @@ func TestClassifyStorageState(t *testing.T) {
 func TestPostHealth(t *testing.T) {
 	var got healthReport
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Admiral-Token") != "tok" {
+		if r.Header.Get("Authorization") != "Bearer tok" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -537,7 +537,7 @@ func TestFetchTaskEncryptionKey(t *testing.T) {
 		if r.URL.Path != "/api/v1/nodes/task-encryption-key" {
 			t.Errorf("expected /api/v1/nodes/task-encryption-key, got %s", r.URL.Path)
 		}
-		gotToken = r.Header.Get("X-Admiral-Token")
+		gotToken = r.Header.Get("Authorization")
 		writeJSON(w, http.StatusOK, map[string]string{"task_encryption_key": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"})
 	}))
 	defer server.Close()
@@ -552,8 +552,8 @@ func TestFetchTaskEncryptionKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchTaskEncryptionKey: %v", err)
 	}
-	if gotToken != "test-node-token" {
-		t.Fatalf("expected X-Admiral-Token = test-node-token, got %q", gotToken)
+	if gotToken != "Bearer test-node-token" {
+		t.Fatalf("expected Authorization = Bearer test-node-token, got %q", gotToken)
 	}
 	if key != "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2" {
 		t.Fatalf("unexpected key %q", key)
