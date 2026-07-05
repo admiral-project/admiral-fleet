@@ -14,12 +14,9 @@ import (
 
 type Config struct {
 	NodeID                string
-	QueueDatabaseURL      string
 	APIURL                string
 	APICACertFile         string
 	FleetToken            string
-	TaskPublicKey         string
-	TaskEncryptionKey     string
 	Executor              string
 	QuadletDir            string
 	DataDir               string
@@ -35,12 +32,9 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		NodeID:                os.Getenv("ADMIRAL_FLEET_NODE_ID"),
-		QueueDatabaseURL:      os.Getenv("ADMIRAL_QUEUE_DATABASE_URL"),
 		APIURL:                getEnv("ADMIRAL_API_URL", "https://127.0.0.1:8080"),
 		APICACertFile:         os.Getenv("ADMIRAL_API_CA_FILE"),
 		FleetToken:            os.Getenv("ADMIRAL_FLEET_TOKEN"),
-		TaskPublicKey:         os.Getenv("ADMIRAL_TASK_PUBLIC_KEY"),
-		TaskEncryptionKey:     os.Getenv("ADMIRAL_TASK_ENCRYPTION_KEY"),
 		Executor:              getEnv("ADMIRAL_FLEET_EXECUTOR", "simulated"),
 		QuadletDir:            getEnv("ADMIRAL_FLEET_QUADLET_DIR", "/etc/containers/systemd/admiral"),
 		DataDir:               getEnv("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
@@ -71,12 +65,6 @@ func Load() (*Config, error) {
 	}
 	if cfg.RootlessUser == "" {
 		return nil, fmt.Errorf("ADMIRAL_FLEET_ROOTLESS_USER is required: Admiral only supports rootless workloads")
-	}
-	if cfg.QueueDatabaseURL == "" {
-		return nil, fmt.Errorf("ADMIRAL_QUEUE_DATABASE_URL is required")
-	}
-	if cfg.TaskPublicKey == "" {
-		return nil, fmt.Errorf("ADMIRAL_TASK_PUBLIC_KEY is required")
 	}
 	if err := tlsconfig.ValidateURLScheme(cfg.APIURL, "https"); err != nil {
 		return nil, fmt.Errorf("invalid ADMIRAL_API_URL: %w", err)
