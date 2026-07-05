@@ -82,7 +82,7 @@ func (a *Agent) postHeartbeat(req admiral.HeartbeatRequest) error {
 		return fmt.Errorf("create heartbeat request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Admiral-Token", a.FleetToken)
+	httpReq.Header.Set("Authorization", "Bearer "+a.FleetToken)
 
 	resp, err := a.http.Do(httpReq)
 	if err != nil {
