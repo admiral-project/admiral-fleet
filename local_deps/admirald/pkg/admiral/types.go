@@ -21,14 +21,14 @@ type FleetTask struct {
 type TaskAction string
 
 const (
-	ActionProvisionApp   TaskAction = "provision"
-	ActionDeprovisionApp TaskAction = "deprovision"
-	ActionStartApp       TaskAction = "start"
-	ActionStopApp        TaskAction = "stop"
-	ActionPauseApp       TaskAction = "pause"
-	ActionResumeApp      TaskAction = "resume"
-	ActionRestartApp     TaskAction = "restart"
-	ActionResizeApp      TaskAction = "resize"
+	ActionProvisionApp    TaskAction = "provision"
+	ActionDeprovisionApp  TaskAction = "deprovision"
+	ActionStartApp        TaskAction = "start"
+	ActionStopApp         TaskAction = "stop"
+	ActionPauseApp        TaskAction = "pause"
+	ActionResumeApp       TaskAction = "resume"
+	ActionRestartApp      TaskAction = "restart"
+	ActionResizeApp       TaskAction = "resize"
 	ActionBackupDatabase  TaskAction = "backup"
 	ActionRestoreDatabase TaskAction = "restore"
 	ActionBackupVolumes   TaskAction = "backup-volumes"
@@ -48,22 +48,22 @@ type TierInfo struct {
 }
 
 type ServiceInfo struct {
-	Name                 string
-	Image                string
-	Command              string
-	Port                 int
-	Env                  map[string]string
-	Secrets              map[string]string
-	DependsOn            []string
-	Requires             []string
-	Volume               string
-	SharedVolumes        []ServiceSharedVolumeMount
-	HealthCheck          *YAMLHealthCheck
-	User                 string
-	Registry             *RegistryInfo
-	SetupCommand         string
-	SetupTimeout         int
-	HealthCheckWaitSecs  int
+	Name                string
+	Image               string
+	Command             string
+	Port                int
+	Env                 map[string]string
+	Secrets             map[string]string
+	DependsOn           []string
+	Requires            []string
+	Volume              string
+	SharedVolumes       []ServiceSharedVolumeMount
+	HealthCheck         *YAMLHealthCheck
+	User                string
+	Registry            *RegistryInfo
+	SetupCommand        string
+	SetupTimeout        int
+	HealthCheckWaitSecs int
 }
 
 type RegistryInfo struct {
@@ -105,15 +105,15 @@ type BackupTaskInfo struct {
 }
 
 type RestoreTaskInfo struct {
-	ID              string
-	BackupID        string
-	DatabaseType    string
-	StorageKey      string
-	StorageBackend  string
-	VerifyChecksum  bool
+	ID             string
+	BackupID       string
+	DatabaseType   string
+	StorageKey     string
+	StorageBackend string
+	VerifyChecksum bool
 	ChecksumSHA256 string
-	BackupType      string
-	Service         string
+	BackupType     string
+	Service        string
 }
 
 type TaskResult struct {
@@ -146,10 +146,10 @@ type StorageReport struct {
 type StorageState string
 
 const (
-	StorageUnknown  StorageState = "unknown"
-	StorageOK       StorageState = "ok"
-	StorageWarning  StorageState = "warning"
-	StorageCritical StorageState = "critical"
+	StorageUnknown   StorageState = "unknown"
+	StorageOK        StorageState = "ok"
+	StorageWarning   StorageState = "warning"
+	StorageCritical  StorageState = "critical"
 	StorageOverQuota StorageState = "over-quota"
 )
 
@@ -178,7 +178,7 @@ type StorageConfig struct {
 	BackupID        string
 	Backend         string
 	Key             string
-	S3 struct {
+	S3              struct {
 		Bucket string
 		Region string
 	}

@@ -103,10 +103,10 @@ func (a *Agent) ClaimTask() (*admiral.FleetTask, string, error) {
 	}
 
 	var result struct {
-		CommandID    string              `json:"command_id"`
-		Task         *admiral.FleetTask  `json:"task"`
-		AttemptCount int                 `json:"attempt_count"`
-		MaxAttempts  int                 `json:"max_attempts"`
+		CommandID    string             `json:"command_id"`
+		Task         *admiral.FleetTask `json:"task"`
+		AttemptCount int                `json:"attempt_count"`
+		MaxAttempts  int                `json:"max_attempts"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, "", fmt.Errorf("decode claim response: %w", err)
