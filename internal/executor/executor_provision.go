@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
+	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 )
 
 func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
@@ -486,8 +487,11 @@ func extractContainerStatus(inspect []byte) string {
 }
 
 func validateProvisionTask(task admiral.FleetTask) error {
-	if strings.TrimSpace(task.InstanceID) == "" {
+	if task.InstanceID == "" {
 		return fmt.Errorf("instance_id is required")
+	}
+	if err := security.ValidateInstanceID(task.InstanceID); err != nil {
+		return fmt.Errorf("invalid instance_id: %w", err)
 	}
 	if !hasValidTaskMemoryLimit(task.Tier.Memory) {
 		return fmt.Errorf("provision_app requires a valid memory limit, got %q", task.Tier.Memory)

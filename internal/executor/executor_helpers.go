@@ -74,6 +74,9 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 	if e.RootlessUser == "" {
 		return nil
 	}
+	if err := security.ValidateInstanceID(instanceID); err != nil {
+		return fmt.Errorf("chown instance data: invalid instance_id: %w", err)
+	}
 	u, err := e.UserLookup.Lookup(e.RootlessUser)
 	if err != nil {
 		return fmt.Errorf("lookup rootless user %q: %w", e.RootlessUser, err)

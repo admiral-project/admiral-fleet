@@ -10,11 +10,16 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
+	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 )
 
 func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	if err := security.ValidateInstanceID(task.InstanceID); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("invalid instance_id: %v", err)
+		return result
+	}
 	for _, unit := range deprovisionUnitNames(task) {
 		if err := e.systemd().Stop(ctx, unit); err != nil {
 			slog.Debug("stop unit during deprovision", "unit", unit, "error", err)

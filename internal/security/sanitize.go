@@ -113,3 +113,51 @@ func ValidateExecParams(name string, args []string) error {
 	}
 	return nil
 }
+
+func ValidateInstanceID(id string) error {
+	if id == "" {
+		return fmt.Errorf("instance ID cannot be empty")
+	}
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("instance ID contains path traversal")
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return fmt.Errorf("instance ID contains path separator")
+	}
+	if strings.ContainsAny(id, "\x00") {
+		return fmt.Errorf("instance ID contains null byte")
+	}
+	return nil
+}
+
+func ValidateOperationID(id string) error {
+	if id == "" {
+		return fmt.Errorf("operation ID cannot be empty")
+	}
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("operation ID contains path traversal")
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return fmt.Errorf("operation ID contains path separator")
+	}
+	if strings.ContainsAny(id, "\x00") {
+		return fmt.Errorf("operation ID contains null byte")
+	}
+	return nil
+}
+
+func ValidateBackupID(id string) error {
+	if id == "" {
+		return fmt.Errorf("backup ID cannot be empty")
+	}
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("backup ID contains path traversal")
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return fmt.Errorf("backup ID contains path separator")
+	}
+	if strings.ContainsAny(id, "\x00") {
+		return fmt.Errorf("backup ID contains null byte")
+	}
+	return nil
+}

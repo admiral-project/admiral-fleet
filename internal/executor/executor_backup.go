@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/storage"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
@@ -38,6 +39,17 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 	if err != nil {
 		result.Success = false
 		result.Error = err.Error()
+		return result
+	}
+
+	if err := security.ValidateInstanceID(task.InstanceID); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("invalid instance_id: %v", err)
+		return result
+	}
+	if err := security.ValidateOperationID(task.OperationID); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("invalid operation_id: %v", err)
 		return result
 	}
 
@@ -109,6 +121,16 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 }
 
 func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	if err := security.ValidateInstanceID(task.InstanceID); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("invalid instance_id: %v", err)
+		return result
+	}
+	if err := security.ValidateOperationID(task.OperationID); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("invalid operation_id: %v", err)
+		return result
+	}
 	base := e.DataDir
 	if strings.TrimSpace(base) == "" {
 		base = "/var/lib/admiral"

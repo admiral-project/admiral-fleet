@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
+	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 )
 
 var sensitiveEnvPattern = regexp.MustCompile(`(?i)(SECRET|PASSWORD|TOKEN|KEY|CREDENTIAL)`)
@@ -36,6 +37,9 @@ func NewRenderer(quadletDir, dataDir string) *Renderer {
 }
 
 func (r *Renderer) Render(task admiral.FleetTask) error {
+	if err := security.ValidateInstanceID(task.InstanceID); err != nil {
+		return fmt.Errorf("render quadlet: invalid instance_id: %w", err)
+	}
 	instanceDir := filepath.Join(r.DataDir, "instances", task.InstanceID)
 	envDir := filepath.Join(instanceDir, "env")
 	if err := os.MkdirAll(envDir, 0700); err != nil {

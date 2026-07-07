@@ -115,7 +115,10 @@ func (a *Agent) ClaimTask() (*admiral.FleetTask, string, error) {
 		return nil, "", fmt.Errorf("invalid claim response: missing command_id or task")
 	}
 
-	if a.taskPublicKey != nil && result.Task != nil && result.Task.TaskSignature != "" {
+	if a.taskPublicKey != nil && result.Task != nil {
+		if result.Task.TaskSignature == "" {
+			return nil, "", fmt.Errorf("task signature is required but missing")
+		}
 		if err := verifyTaskSignature(result.Task, a.taskPublicKey); err != nil {
 			return nil, "", fmt.Errorf("task verification failed: %w", err)
 		}
