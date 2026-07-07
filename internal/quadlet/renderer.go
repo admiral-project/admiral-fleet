@@ -214,7 +214,7 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	fmt.Fprintf(&b, "EnvironmentFile=%s\n", envPath)
 	fmt.Fprintf(&b, "Pod=%s\n", PodFileName(instanceID))
 	fmt.Fprintf(&b, "CgroupsMode=no-conmon\n")
-	fmt.Fprintf(&b, "DropCapabilities=all\n")
+	fmt.Fprintf(&b, "DropCapability=all\n")
 	fmt.Fprintf(&b, "NoNewPrivileges=true\n")
 	if svc.Volume != "" {
 		fmt.Fprintf(&b, "Volume=%s:%s\n", VolumeFileName(instanceID, svc.Name), defaultVolumeTarget(svc))
