@@ -214,7 +214,10 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	fmt.Fprintf(&b, "EnvironmentFile=%s\n", envPath)
 	fmt.Fprintf(&b, "Pod=%s\n", PodFileName(instanceID))
 	fmt.Fprintf(&b, "CgroupsMode=no-conmon\n")
-	fmt.Fprintf(&b, "DropCapability=all\n")
+	// Note: DropCapability=all is intentionally omitted because it breaks
+	// container entrypoints that need setuid/setgid (e.g. MariaDB switching
+	// to the mysql user). NoNewPrivileges=true provides baseline hardening
+	// without breaking capability-dependent operations.
 	fmt.Fprintf(&b, "NoNewPrivileges=true\n")
 	if svc.Volume != "" {
 		fmt.Fprintf(&b, "Volume=%s:%s\n", VolumeFileName(instanceID, svc.Name), defaultVolumeTarget(svc))
