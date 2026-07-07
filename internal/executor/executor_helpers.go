@@ -15,6 +15,7 @@ import (
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
+	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/systemd"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )

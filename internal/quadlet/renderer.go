@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
+	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
 var sensitiveEnvPattern = regexp.MustCompile(`(?i)(SECRET|PASSWORD|TOKEN|KEY|CREDENTIAL)`)

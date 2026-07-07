@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
+	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
 func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {

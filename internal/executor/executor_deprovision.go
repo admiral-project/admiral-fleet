@@ -10,8 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/admiral-project/admiral/admirald/pkg/admiral"
+	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
+	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
 func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
