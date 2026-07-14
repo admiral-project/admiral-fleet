@@ -321,11 +321,6 @@ func (a *Agent) StartBackupStorageWarner(ctx context.Context) {
 }
 
 func (a *Agent) warnIfNoBackupStorage() {
-	// Rootless check: Ensure we're not running as root.
-	if os.Getuid() == 0 {
-		slog.Error("SECURITY VIOLATION: admiral-fleet must not run as root. Rootless execution is required.")
-	}
-
 	// Backup storage check:
 	// Simple heuristic: if we don't have S3 credentials, we're likely only doing local backups.
 	accessKey := os.Getenv("ADMIRAL_S3_ACCESS_KEY_ID")

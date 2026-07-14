@@ -131,10 +131,12 @@ func (e *SystemdPodmanExecutor) systemd() *systemd.Manager {
 func (e *SystemdPodmanExecutor) podman() *podman.Inspector {
 	if e.Podman != nil {
 		e.Podman.RootlessUser = e.RootlessUser
+		e.Podman.TempDir = filepath.Join(e.DataDir, "tmp")
 		return e.Podman
 	}
 	insp := podman.NewInspector(nil)
 	insp.RootlessUser = e.RootlessUser
+	insp.TempDir = filepath.Join(e.DataDir, "tmp")
 	return insp
 }
 

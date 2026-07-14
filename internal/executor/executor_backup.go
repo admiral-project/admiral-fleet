@@ -95,6 +95,7 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 
 	fi, _ := e.FS.Stat(path)
 	checksum := fmt.Sprintf("%x", h.Sum(nil))
+	storageKey := filepath.Join(task.InstanceID, filepath.Base(path))
 
 	backupID := ""
 	if task.Storage != nil {
@@ -106,17 +107,18 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 		if err := e.uploadToS3(ctx, task, compressed); err != nil {
 			result.Error = fmt.Sprintf("S3 upload failed: %v", err)
 			result.Logs = fmt.Sprintf("database backup stored at %s, but S3 upload failed: %v", path, err)
-			result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"database","database_type":%q,"storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, databaseType, path, fi.Size(), checksum, time.Now().UTC().Format(time.RFC3339))
+			result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"database","database_type":%q,"storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, databaseType, storageKey, fi.Size(), checksum, time.Now().UTC().Format(time.RFC3339))
 			return result
 		}
 		storageBackend = task.Storage.Backend
+		storageKey = task.Storage.Key
 		result.Logs = fmt.Sprintf("%s database backup stored at %s and uploaded to %s", databaseType, path, task.Storage.Backend)
 	} else {
 		result.Logs = fmt.Sprintf("%s database backup stored at %s", databaseType, path)
 	}
 
 	result.Success = true
-	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"database","database_type":%q,"storage_backend":%q,"storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, databaseType, storageBackend, path, fi.Size(), checksum, time.Now().UTC().Format(time.RFC3339))
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"database","database_type":%q,"storage_backend":%q,"storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, databaseType, storageBackend, storageKey, fi.Size(), checksum, time.Now().UTC().Format(time.RFC3339))
 	return result
 }
 
@@ -175,6 +177,7 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 
 	fi, _ := e.FS.Stat(path)
 	checksum := fmt.Sprintf("%x", h.Sum(nil))
+	storageKey := filepath.Join(task.InstanceID, filepath.Base(path))
 
 	backupID := ""
 	if task.Storage != nil {
@@ -186,17 +189,18 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 		if err := e.uploadToS3(ctx, task, compressed); err != nil {
 			result.Error = fmt.Sprintf("S3 upload failed: %v", err)
 			result.Logs = fmt.Sprintf("volume backup stored at %s, but S3 upload failed: %v", path, err)
-			result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"volume","storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, path, fi.Size(), checksum, time.Now().UTC().Format(time.RFC3339))
+			result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"volume","storage_backend":"local","storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, storageKey, fi.Size(), checksum, time.Now().UTC().Format(time.RFC3339))
 			return result
 		}
 		storageBackend = task.Storage.Backend
+		storageKey = task.Storage.Key
 		result.Logs = fmt.Sprintf("volume backup stored at %s and uploaded to %s", path, task.Storage.Backend)
 	} else {
 		result.Logs = fmt.Sprintf("volume backup stored at %s", path)
 	}
 
 	result.Success = true
-	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"volume","storage_backend":%q,"storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, storageBackend, path, fi.Size(), checksum, time.Now().UTC().Format(time.RFC3339))
+	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","backup":{"backup_id":%q,"backup_type":"volume","storage_backend":%q,"storage_key":%q,"size_bytes":%d,"checksum_sha256":%q,"completed_at":%q}}`, backupID, storageBackend, storageKey, fi.Size(), checksum, time.Now().UTC().Format(time.RFC3339))
 	return result
 }
 

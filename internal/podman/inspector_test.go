@@ -452,6 +452,40 @@ func TestInspectorUsesUserBusForRootlessSecrets(t *testing.T) {
 	}
 }
 
+func TestInspectorUsesUserBusForRootlessExec(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+	currentUser, err := user.Current()
+	if err != nil {
+		t.Fatalf("current user: %v", err)
+	}
+	inspector.RootlessUser = currentUser.Username
+
+	if _, err := inspector.ExecWithStdin(context.Background(), "demo", nil, strings.NewReader("input"), "cat"); err != nil {
+		t.Fatalf("rootless exec: %v", err)
+	}
+
+	expected := call{
+		name: "runuser",
+		args: []string{
+			"-u", currentUser.Username, "--",
+			"env",
+			"XDG_RUNTIME_DIR=/run/user/" + currentUser.Uid,
+			"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/" + currentUser.Uid + "/bus",
+			"systemd-run",
+			"--user", "--wait", "--collect", "--pipe", "--",
+			"podman", "exec", "-i", "demo", "cat",
+		},
+	}
+	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0], expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+	if len(runner.stdin) != 1 || runner.stdin[0] != "input" {
+		t.Fatalf("unexpected stdin payloads: %#v", runner.stdin)
+	}
+}
+
 func TestInspectorSecretMethodsErrorCases(t *testing.T) {
 	wantErr := errors.New("secret error")
 	runner := &fakeRunner{err: wantErr}

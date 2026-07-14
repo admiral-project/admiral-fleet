@@ -339,6 +339,9 @@ func TestSystemdPodmanExecutorBackupUsesPodInfraContainer(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("expected backup to succeed, got %q", res.Error)
 	}
+	if !strings.Contains(res.Metadata, `"storage_key":"demo001/mysql-database-op_3.tar.gz"`) {
+		t.Fatalf("expected relative local backup key in metadata, got %s", res.Metadata)
+	}
 	found := false
 	for _, call := range podmanRunner.calls {
 		joined := strings.Join(call, " ")

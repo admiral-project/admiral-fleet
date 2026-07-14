@@ -68,7 +68,8 @@ The agent invokes the following commands on the host:
 |---------|---------|
 | `loginctl enable-linger <user>` | Ensures the user session and its systemd manager stay active after logout. |
 | `systemctl start systemd-machined` | Ensures the `machined` service is active to support the `--machine` transport. |
-| `systemd-run --machine=<user>@ --user` | Executes `systemctl` or `podman` commands within the rootless user's systemd manager. This is required for correct cgroup management. |
+| `systemd-run --machine=<user>@ --user` | Executes `systemctl` commands within the rootless user's systemd manager. |
+| `runuser ... systemd-run --user ... podman exec` | Executes container commands through the rootless user's D-Bus without the unreliable machine transport. |
 | `runuser -u <user> -- env XDG_RUNTIME_DIR=/run/user/<uid> podman` | Executes `podman` commands as the rootless user when systemd-specific cgroup access is not required (e.g., volume inspections). |
 | `podman secret` | Manages sensitive data in the Podman internal secret store, which is then injected into containers via Quadlet `Secret=` keys. |
 
@@ -90,15 +91,16 @@ To maintain rootless integrity, the following permissions are enforced:
 - **Data Directory (`/var/lib/admiral`)**: Mode `0751`. Subdirectories like `instances` and `backups` use `0700` or `0750` to ensure only the rootless user and the agent can access them.
 - **Quadlet Directory**: Mode `0755`. Must be readable by the rootless user's systemd generator.
 - **Environment Files**: Mode `0600`. Contains sensitive environment variables for containers.
-- **Temporary Env Files**: Mode `0600`. Created during `podman exec` operations to avoid leaking secrets in the process list.
+- **Temporary Env Files**: Mode `0600`, owned by the rootless user under `/var/lib/admiral/tmp`. This shared path remains visible when Fleet uses `PrivateTmp=true`.
 
 ### Cgroup Management Hacks
 
-Standard `runuser` or `sudo` do not grant access to the user's systemd cgroup hierarchy. Admiral uses the `--machine` transport of `systemd-run` to bridge this gap:
+Standard `runuser` or `sudo` do not grant access to the user's systemd cgroup hierarchy. Admiral targets the persistent user manager explicitly:
 
 1. **Lingering**: Enabled via `loginctl` to ensure the user's `systemd --user` instance is always running.
-2. **Machine Transport**: Commands like `systemctl --user daemon-reload` are wrapped in `systemd-run --machine=<user>@ --user` so they execute within the correct D-Bus and cgroup context of the rootless user.
-3. **XDG_RUNTIME_DIR**: Manually exported when using `runuser` to ensure `podman` can locate the user's rootless storage and Unix sockets.
+2. **Machine Transport for systemctl**: Commands like `systemctl --user daemon-reload` use `systemd-run --machine=<user>@ --user`.
+3. **User bus for Podman exec and secrets**: Fleet exports `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, then starts a transient `systemd-run --user` unit.
+4. **Direct runuser for simple Podman operations**: One-shot `run`, `exists`, `inspect`, and `port` operations use `runuser` with `XDG_RUNTIME_DIR`.
 
 ## Requirements
 

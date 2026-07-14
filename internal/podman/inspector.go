@@ -8,12 +8,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +63,7 @@ type Inspector struct {
 	Runner       Runner
 	Timeout      time.Duration
 	RootlessUser string // empty = run as root; set = run via sudo -u
+	TempDir      string // shared with the rootless user manager when PrivateTmp is enabled
 }
 
 func NewInspector(runner Runner) *Inspector {
@@ -214,7 +215,7 @@ func (i *Inspector) execWithInput(ctx context.Context, container string, env map
 
 	var envFile string
 	if len(env) > 0 {
-		f, err := os.CreateTemp("", "admiral-env-")
+		f, err := i.createEnvFile()
 		if err != nil {
 			return nil, fmt.Errorf("create temp env file: %w", err)
 		}
@@ -250,7 +251,7 @@ func (i *Inspector) execTrustedWithInput(ctx context.Context, container string, 
 
 	var envFile string
 	if len(env) > 0 {
-		f, err := os.CreateTemp("", "admiral-env-")
+		f, err := i.createEnvFile()
 		if err != nil {
 			return nil, fmt.Errorf("create temp env file: %w", err)
 		}
@@ -276,6 +277,47 @@ func (i *Inspector) execTrustedWithInput(ctx context.Context, container string, 
 	cmdArgs = append(cmdArgs, container)
 	cmdArgs = append(cmdArgs, args...)
 	return i.runTrustedWithStdin(ctx, stdin, cmdArgs...)
+}
+
+func (i *Inspector) createEnvFile() (*os.File, error) {
+	tempDir := i.TempDir
+	if tempDir == "" {
+		tempDir = os.TempDir()
+	}
+	if err := os.MkdirAll(tempDir, 0711); err != nil {
+		return nil, fmt.Errorf("create shared temp dir: %w", err)
+	}
+	f, err := os.CreateTemp(tempDir, "admiral-env-")
+	if err != nil {
+		return nil, err
+	}
+	if i.RootlessUser == "" {
+		return f, nil
+	}
+	u, err := user.Lookup(i.RootlessUser)
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return nil, fmt.Errorf("lookup rootless user %q: %w", i.RootlessUser, err)
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return nil, fmt.Errorf("parse uid for rootless user %q: %w", i.RootlessUser, err)
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return nil, fmt.Errorf("parse gid for rootless user %q: %w", i.RootlessUser, err)
+	}
+	if err := f.Chown(uid, gid); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return nil, fmt.Errorf("chown temp env file to rootless user %q: %w", i.RootlessUser, err)
+	}
+	return f, nil
 }
 
 func (i *Inspector) CopyToContainer(ctx context.Context, sourcePath, containerPath string) ([]byte, error) {
@@ -437,7 +479,7 @@ func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, arg
 	// and fails with "systemd slice received as cgroup parent when
 	// using cgroupfs".
 	if len(args) > 0 && args[0] == "exec" {
-		return i.runAsUserSystemdSession(ctx, stdin, args...)
+		return i.runAsUserSystemdUserSession(ctx, stdin, args...)
 	}
 
 	// Use runuser to run podman as the rootless user, with XDG_RUNTIME_DIR set
@@ -466,50 +508,10 @@ func (i *Inspector) runAsUserWithStdin(ctx context.Context, stdin io.Reader, arg
 	return runner.Run(ctx, "runuser", runuserArgs...)
 }
 
-// runAsUserSystemdSession runs podman inside the rootless user's systemd
-// session via systemd-run --machine. It first ensures systemd-machined is
-// running so the --machine transport can resolve the user@ target.
-func (i *Inspector) runAsUserSystemdSession(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
-	// Ensure systemd-machined is active (it is D-Bus activated but may not
-	// have been running when the user session started, which prevents
-	// --machine=user@ from resolving).
-	_ = exec.CommandContext(ctx, "systemctl", "start", "systemd-machined").Run()
-
-	sdrunArgs := append([]string{
-		"--machine", i.RootlessUser + "@",
-		"--user",
-		"--wait",
-		"--collect",
-		"--pipe",
-		"--",
-		"podman",
-	}, args...)
-	slog.Debug("running podman via user systemd session",
-		"user", i.RootlessUser,
-		"args", args,
-	)
-
-	runner := i.Runner
-	if runner == nil {
-		runner = CommandRunner{}
-	}
-	cr, ok := runner.(*CommandRunner)
-	if ok {
-		return cr.runWithStdin(ctx, stdin, "systemd-run", sdrunArgs...)
-	}
-	if stdin != nil {
-		if runnerWithStdin, ok := runner.(stdinRunner); ok {
-			return runnerWithStdin.RunWithStdin(ctx, stdin, "systemd-run", sdrunArgs...)
-		}
-		return nil, fmt.Errorf("runner %T does not support stdin", runner)
-	}
-	return runner.Run(ctx, "systemd-run", sdrunArgs...)
-}
-
 // runAsUserSystemdUserSession starts a transient user-manager unit in the
 // rootless user's own systemd session. This keeps podman secret operations
-// attached to the rootless runtime and avoids the admiral-fleet.service
-// sandbox edge cases observed with direct runuser invocation.
+// and exec operations attached to the rootless runtime and avoids the
+// unreliable systemd-machined transport from the fleet service sandbox.
 func (i *Inspector) runAsUserSystemdUserSession(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
 	u, err := user.Lookup(i.RootlessUser)
 	if err != nil {
@@ -559,7 +561,7 @@ func (i *Inspector) runAsUserWithStdinTrusted(ctx context.Context, stdin io.Read
 	// and fails with "systemd slice received as cgroup parent when
 	// using cgroupfs".
 	if len(args) > 0 && args[0] == "exec" {
-		return i.runAsUserSystemdSession(ctx, stdin, args...)
+		return i.runAsUserSystemdUserSession(ctx, stdin, args...)
 	}
 
 	// Use runuser to run podman as the rootless user, with XDG_RUNTIME_DIR set
