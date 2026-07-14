@@ -18,9 +18,10 @@ import (
 var sensitiveEnvPattern = regexp.MustCompile(`(?i)(SECRET|PASSWORD|TOKEN|KEY|CREDENTIAL)`)
 
 type Renderer struct {
-	QuadletDir string
-	DataDir    string
-	HostPorts  map[string]int // service name -> allocated host port
+	QuadletDir     string
+	DataDir        string
+	HostPorts      map[string]int // service name -> allocated host port
+	PublishAddress string
 }
 
 // wantedBy returns the systemd target for Quadlet [Install] sections.
@@ -31,8 +32,9 @@ func (r *Renderer) wantedBy() string {
 
 func NewRenderer(quadletDir, dataDir string) *Renderer {
 	return &Renderer{
-		QuadletDir: defaultString(quadletDir, "/etc/containers/systemd"),
-		DataDir:    defaultString(dataDir, "/var/lib/admiral"),
+		QuadletDir:     defaultString(quadletDir, "/etc/containers/systemd"),
+		DataDir:        defaultString(dataDir, "/var/lib/admiral"),
+		PublishAddress: os.Getenv("ADMIRAL_FLEET_PUBLISH_ADDRESS"),
 	}
 }
 
@@ -183,7 +185,11 @@ func (r *Renderer) renderPod(task admiral.FleetTask) string {
 		if svc.Port > 0 {
 			hostPort, ok := r.HostPorts[svc.Name]
 			if ok && hostPort > 0 {
-				fmt.Fprintf(&b, "PublishPort=%d:%d\n", hostPort, svc.Port)
+				if r.PublishAddress != "" {
+					fmt.Fprintf(&b, "PublishPort=%s:%d:%d\n", r.PublishAddress, hostPort, svc.Port)
+				} else {
+					fmt.Fprintf(&b, "PublishPort=%d:%d\n", hostPort, svc.Port)
+				}
 			} else {
 				fmt.Fprintf(&b, "PublishPort=%d\n", svc.Port)
 			}

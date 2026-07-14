@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -28,7 +27,7 @@ type ReadyInfo struct {
 	CheckedAt string `json:"checked_at"`
 }
 
-func ipAllowed(addr string) bool {
+func ipAllowed(addr, allowedAdminIP string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
@@ -37,13 +36,16 @@ func ipAllowed(addr string) bool {
 	if ip == nil {
 		return false
 	}
-	// Without VPN, we only trust the local node.
-	return ip.IsLoopback()
+	if ip.IsLoopback() {
+		return true
+	}
+	adminIP := net.ParseIP(allowedAdminIP)
+	return adminIP != nil && ip.Equal(adminIP)
 }
 
-func allowedHandler(h http.HandlerFunc) http.HandlerFunc {
+func allowedHandler(allowedAdminIP string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !ipAllowed(r.RemoteAddr) {
+		if !ipAllowed(r.RemoteAddr, allowedAdminIP) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"status":"forbidden"}`))
@@ -54,8 +56,12 @@ func allowedHandler(h http.HandlerFunc) http.HandlerFunc {
 }
 
 func StartHTTPServer(addr, nodeID, executor, targetHost, targetPort string) {
+	StartHTTPServerWithAllowedAdmin(addr, nodeID, executor, targetHost, targetPort, "")
+}
+
+func StartHTTPServerWithAllowedAdmin(addr, nodeID, executor, targetHost, targetPort, allowedAdminIP string) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", allowedHandler(func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/health", allowedHandler(allowedAdminIP, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, EndpointInfo{
 			NodeID:     nodeID,
 			TargetHost: targetHost,
@@ -65,7 +71,7 @@ func StartHTTPServer(addr, nodeID, executor, targetHost, targetPort string) {
 			CheckedAt:  time.Now().UTC().Format(time.RFC3339),
 		})
 	}))
-	mux.HandleFunc("/endpoint", allowedHandler(func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/endpoint", allowedHandler(allowedAdminIP, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, EndpointInfo{
 			NodeID:     nodeID,
 			TargetHost: targetHost,
@@ -75,7 +81,7 @@ func StartHTTPServer(addr, nodeID, executor, targetHost, targetPort string) {
 			CheckedAt:  time.Now().UTC().Format(time.RFC3339),
 		})
 	}))
-	mux.HandleFunc("/ready", allowedHandler(func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/ready", allowedHandler(allowedAdminIP, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, ReadyInfo{
 			Status:    "ok",
 			NodeID:    nodeID,
@@ -84,29 +90,19 @@ func StartHTTPServer(addr, nodeID, executor, targetHost, targetPort string) {
 		})
 	}))
 
-	// Listen on all interfaces; IP filtering is done in the handlers
-	_, port, err := net.SplitHostPort(addr)
+	bindAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
-		if !strings.Contains(addr, ":") && addr != "" {
-			port = addr
-		} else {
-			slog.Warn("internal HTTP server address is invalid; skipping local listener", "addr", addr, "error", err)
-			return
-		}
-	}
-	if port == "" {
-		slog.Warn("internal HTTP server address is missing a port; skipping local listener", "addr", addr)
+		slog.Warn("internal HTTP server address is invalid; skipping local listener", "addr", addr, "error", err)
 		return
 	}
-	bindAddr := net.JoinHostPort("", port)
 	server := &http.Server{
-		Addr:              bindAddr,
+		Addr:              bindAddr.String(),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}
 	go func() {
-		slog.Info("starting internal HTTP server", "addr", bindAddr)
+		slog.Info("starting internal HTTP server", "addr", bindAddr.String())
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Warn("internal HTTP server stopped", "error", err)
 		}

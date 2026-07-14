@@ -32,7 +32,7 @@ func main() {
 	}
 
 	slog.Info("admiral-fleet started", "node_id", cfg.NodeID, "executor", cfg.Executor)
-	agent.StartHTTPServer(cfg.HTTPAddr, cfg.NodeID, cfg.Executor, cfg.PublicHost, cfg.PublicPort)
+	agent.StartHTTPServerWithAllowedAdmin(cfg.HTTPAddr, cfg.NodeID, cfg.Executor, cfg.PublicHost, cfg.PublicPort, os.Getenv("ADMIRAL_FLEET_ADMIN_WIREGUARD_IP"))
 	go fleetAgent.StartHealthChecker(context.Background())
 	go fleetAgent.StartHeartbeatSender(context.Background())
 	go fleetAgent.StartStorageChecker(context.Background())
