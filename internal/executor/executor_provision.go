@@ -536,6 +536,8 @@ const minHostPort = 40000
 const maxHostPort = 49999
 
 func (e *SystemdPodmanExecutor) allocateHostPorts(dataDir, instanceID string, services []admiral.ServiceInfo) (map[string]int, error) {
+	e.portMu.Lock()
+	defer e.portMu.Unlock()
 	// Idempotency: if ports already allocated for this instance, reuse them.
 	if existing := e.loadHostPorts(dataDir, instanceID); existing != nil {
 		return existing, nil

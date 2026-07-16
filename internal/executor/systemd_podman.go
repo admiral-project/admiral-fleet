@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/osutil"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
@@ -28,6 +29,7 @@ type SystemdPodmanExecutor struct {
 	UserLookup   osutil.UserLookup
 	DataDir      string
 	RootlessUser string // empty = rootful; set = rootless systemd --user target
+	portMu       sync.Mutex
 }
 
 func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir, rootlessUser string) *SystemdPodmanExecutor {

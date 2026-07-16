@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
@@ -216,9 +217,9 @@ func isRestrictedIP(ip net.IP) bool {
 	return false
 }
 
-func isPrivateHost(host string) error {
+func resolveRestoreHost(ctx context.Context, host string) ([]net.IP, error) {
 	if host == "" {
-		return fmt.Errorf("empty host")
+		return nil, fmt.Errorf("empty host")
 	}
 	// Strip port if present
 	h, _, err := net.SplitHostPort(host)
@@ -228,25 +229,89 @@ func isPrivateHost(host string) error {
 	// Try direct IP parsing first
 	if ip := net.ParseIP(h); ip != nil {
 		if isRestrictedIP(ip) {
-			return fmt.Errorf("refuse connection to private or restricted IP %q", ip)
+			return nil, fmt.Errorf("refuse connection to private or restricted IP %q", ip)
 		}
+		return []net.IP{ip}, nil
+	}
+	// Resolve all answers once and reject if any answer is restricted.
+	addrInfos, err := net.DefaultResolver.LookupNetIP(ctx, "ip", h)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve host %q: %w", h, err)
+	}
+	if len(addrInfos) == 0 {
+		return nil, fmt.Errorf("host %q has no addresses", h)
+	}
+	ips := make([]net.IP, 0, len(addrInfos))
+	for _, addr := range addrInfos {
+		ip := net.IP(addr.AsSlice())
+		if isRestrictedIP(ip) {
+			return nil, fmt.Errorf("refuse connection to host %q resolving to private or restricted IP %q", h, ip)
+		}
+		ips = append(ips, ip)
+	}
+	return ips, nil
+}
+
+func isPrivateHost(host string) error {
+	_, err := resolveRestoreHost(context.Background(), host)
+	return err
+}
+
+func newRestoreHTTPClient(ctx context.Context, sourceURI string) (*http.Client, error) {
+	parsed, err := url.Parse(sourceURI)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Scheme != "https" {
+		return nil, fmt.Errorf("restore uri must use https")
+	}
+	initial, err := resolveRestoreHost(ctx, parsed.Host)
+	if err != nil {
+		return nil, err
+	}
+	var mu sync.RWMutex
+	pinned := map[string][]net.IP{strings.ToLower(parsed.Hostname()): initial}
+	pinURL := func(target *url.URL) error {
+		if target.Scheme != "https" {
+			return fmt.Errorf("restore redirect must use https")
+		}
+		ips, err := resolveRestoreHost(ctx, target.Host)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		pinned[strings.ToLower(target.Hostname())] = ips
+		mu.Unlock()
 		return nil
 	}
-	// Resolve DNS and check all returned IPs
-	ips, err := net.DefaultResolver.LookupHost(context.Background(), h)
-	if err != nil {
-		return fmt.Errorf("cannot resolve host %q: %w", h, err)
+	transport := &http.Transport{
+		DialContext: func(dialCtx context.Context, _, address string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			mu.RLock()
+			ips := pinned[strings.ToLower(strings.TrimSuffix(host, "."))]
+			mu.RUnlock()
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("host %q was not pinned after validation", host)
+			}
+			var lastErr error
+			for _, ip := range ips {
+				conn, dialErr := (&net.Dialer{}).DialContext(dialCtx, "tcp", net.JoinHostPort(ip.String(), port))
+				if dialErr == nil {
+					return conn, nil
+				}
+				lastErr = dialErr
+			}
+			return nil, lastErr
+		},
 	}
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
-		}
-		if isRestrictedIP(ip) {
-			return fmt.Errorf("refuse connection to host %q resolving to private or restricted IP %q", h, ip)
-		}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: transport}
+	client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
+		return pinURL(req.URL)
 	}
-	return nil
+	return client, nil
 }
 
 func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sourceURI string) (string, error) {
@@ -257,10 +322,10 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 	if parsed.Scheme != "https" {
 		return "", fmt.Errorf("restore uri must use https")
 	}
-	if err := isPrivateHost(parsed.Host); err != nil {
+	client, err := newRestoreHTTPClient(ctx, sourceURI)
+	if err != nil {
 		return "", fmt.Errorf("restore uri rejected: %w", err)
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURI, nil)
 	if err != nil {
 		return "", fmt.Errorf("create restore download request: %w", err)

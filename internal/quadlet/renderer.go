@@ -5,6 +5,7 @@ package quadlet
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,14 +32,21 @@ func (r *Renderer) wantedBy() string {
 }
 
 func NewRenderer(quadletDir, dataDir string) *Renderer {
+	publishAddress := os.Getenv("ADMIRAL_FLEET_PUBLISH_ADDRESS")
+	if strings.TrimSpace(publishAddress) == "" {
+		publishAddress = "127.0.0.1"
+	}
 	return &Renderer{
 		QuadletDir:     defaultString(quadletDir, "/etc/containers/systemd"),
 		DataDir:        defaultString(dataDir, "/var/lib/admiral"),
-		PublishAddress: os.Getenv("ADMIRAL_FLEET_PUBLISH_ADDRESS"),
+		PublishAddress: publishAddress,
 	}
 }
 
 func (r *Renderer) Render(task admiral.FleetTask) error {
+	if ip := net.ParseIP(strings.TrimSpace(r.PublishAddress)); ip == nil || ip.IsUnspecified() {
+		return fmt.Errorf("render quadlet: publish address must be a specific IPv4 or IPv6 address, got %q", r.PublishAddress)
+	}
 	if err := security.ValidateInstanceID(task.InstanceID); err != nil {
 		return fmt.Errorf("render quadlet: invalid instance_id: %w", err)
 	}

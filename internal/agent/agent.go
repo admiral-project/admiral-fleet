@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/executor"
@@ -36,6 +37,8 @@ type Agent struct {
 	executor              executor.Executor
 	http                  *http.Client
 	outbox                *outbox
+	replayMu              sync.Mutex
+	seenTasks             map[string]time.Time
 }
 
 func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir, taskPublicKeyHex string, exec executor.Executor) (*Agent, error) {
@@ -72,18 +75,24 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 				TLSClientConfig: clientTLSConfig,
 			},
 		},
-		outbox: newOutbox(outboxDir),
+		outbox:    newOutbox(outboxDir),
+		seenTasks: make(map[string]time.Time),
 	}, nil
 }
 
 // ClaimTask claims the next available task from admirald via HTTP API.
 func (a *Agent) ClaimTask() (*admiral.FleetTask, string, error) {
+	return a.ClaimTaskContext(context.Background())
+}
+
+// ClaimTaskContext claims a task and stops promptly when ctx is cancelled.
+func (a *Agent) ClaimTaskContext(ctx context.Context) (*admiral.FleetTask, string, error) {
 	body, err := json.Marshal(map[string]string{"node_id": a.NodeID})
 	if err != nil {
 		return nil, "", fmt.Errorf("encode claim request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, a.APIURL+"/api/v1/fleet/tasks/claim", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.APIURL+"/api/v1/fleet/tasks/claim", bytes.NewReader(body))
 	if err != nil {
 		return nil, "", fmt.Errorf("create claim request: %w", err)
 	}
@@ -116,19 +125,33 @@ func (a *Agent) ClaimTask() (*admiral.FleetTask, string, error) {
 		return nil, "", fmt.Errorf("invalid claim response: missing command_id or task")
 	}
 
-	if a.taskPublicKey != nil && result.Task != nil {
-		if result.Task.TaskSignature == "" {
-			return nil, "", fmt.Errorf("task signature is required but missing")
-		}
-		if err := verifyTaskSignature(result.Task, a.taskPublicKey); err != nil {
-			return nil, "", fmt.Errorf("task verification failed: %w", err)
-		}
+	if result.Task.TaskSignature == "" {
+		slog.Error("SECURITY: refusing unsigned fleet task", "task_id", result.Task.TaskID, "command_id", result.CommandID)
+		return nil, "", fmt.Errorf("task signature is required but missing")
+	}
+	if a.taskPublicKey == nil {
+		slog.Error("SECURITY: refusing signed fleet task without verification key", "task_id", result.Task.TaskID, "command_id", result.CommandID)
+		return nil, "", fmt.Errorf("task public key is not configured")
+	}
+	if err := verifyTaskSignature(result.Task, a.taskPublicKey); err != nil {
+		return nil, "", fmt.Errorf("task verification failed: %w", err)
+	}
+	if err := a.rememberTask(result.Task); err != nil {
+		return nil, "", err
 	}
 
 	return result.Task, result.CommandID, nil
 }
 
 func verifyTaskSignature(task *admiral.FleetTask, publicKey ed25519.PublicKey) error {
+	if task.SignedAt == 0 {
+		return fmt.Errorf("task signature timestamp is missing")
+	}
+	const signatureWindow = 15 * time.Minute
+	signedAtTime := time.Unix(task.SignedAt, 0)
+	if delta := time.Since(signedAtTime); delta > signatureWindow || delta < -signatureWindow {
+		return fmt.Errorf("task signature timestamp is outside the %s window", signatureWindow)
+	}
 	sig, err := hex.DecodeString(task.TaskSignature)
 	if err != nil {
 		return fmt.Errorf("decode task signature: %w", err)
@@ -147,6 +170,22 @@ func verifyTaskSignature(task *admiral.FleetTask, publicKey ed25519.PublicKey) e
 	if !ed25519.Verify(publicKey, msg, sig) {
 		return fmt.Errorf("task signature verification failed")
 	}
+	return nil
+}
+
+func (a *Agent) rememberTask(task *admiral.FleetTask) error {
+	a.replayMu.Lock()
+	defer a.replayMu.Unlock()
+	now := time.Now()
+	for id, seenAt := range a.seenTasks {
+		if now.Sub(seenAt) > 15*time.Minute {
+			delete(a.seenTasks, id)
+		}
+	}
+	if _, ok := a.seenTasks[task.TaskID]; ok {
+		return fmt.Errorf("task %q has already been accepted", task.TaskID)
+	}
+	a.seenTasks[task.TaskID] = now
 	return nil
 }
 
@@ -214,6 +253,14 @@ func (a *Agent) SendResult(result admiral.TaskResult) error {
 	return a.send(result)
 }
 
+// FlushOutbox attempts to deliver all persisted task results before shutdown.
+func (a *Agent) FlushOutbox() error {
+	if a.outbox == nil {
+		return nil
+	}
+	return a.outbox.flush(a.send)
+}
+
 // Reconcile queries the local Podman state and reports all existing Admiral
 // instances to admirald. It must be called synchronously at startup before
 // consuming tasks so that admirald has an accurate view of running instances.
@@ -239,6 +286,12 @@ func (a *Agent) StartReconciler(ctx context.Context, interval time.Duration) {
 }
 
 func (a *Agent) HandleTask(task admiral.FleetTask) error {
+	return a.HandleTaskContext(context.Background(), task)
+}
+
+// HandleTaskContext executes one task and persists a retryable result if the
+// callback cannot be delivered. Cancellation is passed to the executor.
+func (a *Agent) HandleTaskContext(ctx context.Context, task admiral.FleetTask) error {
 	if a.outbox != nil {
 		if err := a.outbox.flush(a.send); err != nil {
 			slog.Warn("failed to flush task result outbox", "error", err)
@@ -248,7 +301,7 @@ func (a *Agent) HandleTask(task admiral.FleetTask) error {
 	if exec == nil {
 		exec = executor.NewSimulated()
 	}
-	result := exec.Execute(context.Background(), task, a.NodeID)
+	result := exec.Execute(ctx, task, a.NodeID)
 	if err := a.send(result); err != nil {
 		if a.outbox != nil {
 			if enqueueErr := a.outbox.enqueue(result); enqueueErr != nil {

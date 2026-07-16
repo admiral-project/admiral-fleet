@@ -140,20 +140,19 @@ func (i *Inspector) ExecTrustedShell(ctx context.Context, container, command str
 // If containerUser is non-empty, it is passed as --user to podman run.
 func (i *Inspector) RunTrustedInPod(ctx context.Context, pod, image string, env map[string]string, mounts []string, containerUser string, args ...string) ([]byte, error) {
 	cmdArgs := []string{"run", "--rm", "--pod", pod}
+	var envFile string
+	if len(env) > 0 {
+		var err error
+		envFile, err = i.writeTempEnvFile(env)
+		if err != nil {
+			return nil, err
+		}
+		defer os.Remove(envFile)
+		cmdArgs = append(cmdArgs, "--env-file", envFile)
+	}
 
 	if containerUser != "" {
 		cmdArgs = append(cmdArgs, "--user", containerUser)
-	}
-
-	if len(env) > 0 {
-		keys := make([]string, 0, len(env))
-		for key := range env {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			cmdArgs = append(cmdArgs, "--env", fmt.Sprintf("%s=%s", key, env[key]))
-		}
 	}
 
 	for _, mount := range mounts {
@@ -174,20 +173,19 @@ func (i *Inspector) RunTrustedInPod(ctx context.Context, pod, image string, env 
 // used for healthchecks.
 func (i *Inspector) RunTrustedInPodNoEntrypoint(ctx context.Context, pod, image string, env map[string]string, mounts []string, containerUser string, args ...string) ([]byte, error) {
 	cmdArgs := []string{"run", "--rm", "--pod", pod}
+	var envFile string
+	if len(env) > 0 {
+		var err error
+		envFile, err = i.writeTempEnvFile(env)
+		if err != nil {
+			return nil, err
+		}
+		defer os.Remove(envFile)
+		cmdArgs = append(cmdArgs, "--env-file", envFile)
+	}
 
 	if containerUser != "" {
 		cmdArgs = append(cmdArgs, "--user", containerUser)
-	}
-
-	if len(env) > 0 {
-		keys := make([]string, 0, len(env))
-		for key := range env {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			cmdArgs = append(cmdArgs, "--env", fmt.Sprintf("%s=%s", key, env[key]))
-		}
 	}
 
 	for _, mount := range mounts {
@@ -318,6 +316,35 @@ func (i *Inspector) createEnvFile() (*os.File, error) {
 		return nil, fmt.Errorf("chown temp env file to rootless user %q: %w", i.RootlessUser, err)
 	}
 	return f, nil
+}
+
+func (i *Inspector) writeTempEnvFile(env map[string]string) (string, error) {
+	f, err := i.createEnvFile()
+	if err != nil {
+		return "", fmt.Errorf("create temp env file: %w", err)
+	}
+	if err := f.Chmod(0600); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("chmod temp env file: %w", err)
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, err := fmt.Fprintf(f, "%s=%s\n", key, env[key]); err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+			return "", fmt.Errorf("write temp env file: %w", err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("close temp env file: %w", err)
+	}
+	return f.Name(), nil
 }
 
 func (i *Inspector) CopyToContainer(ctx context.Context, sourcePath, containerPath string) ([]byte, error) {

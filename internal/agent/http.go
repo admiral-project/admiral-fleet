@@ -36,11 +36,11 @@ func ipAllowed(addr, allowedAdminIP string) bool {
 	if ip == nil {
 		return false
 	}
-	if ip.IsLoopback() {
-		return true
-	}
 	adminIP := net.ParseIP(allowedAdminIP)
-	return adminIP != nil && ip.Equal(adminIP)
+	if adminIP != nil {
+		return ip.Equal(adminIP)
+	}
+	return ip.IsLoopback()
 }
 
 func allowedHandler(allowedAdminIP string, h http.HandlerFunc) http.HandlerFunc {
@@ -55,11 +55,11 @@ func allowedHandler(allowedAdminIP string, h http.HandlerFunc) http.HandlerFunc 
 	}
 }
 
-func StartHTTPServer(addr, nodeID, executor, targetHost, targetPort string) {
-	StartHTTPServerWithAllowedAdmin(addr, nodeID, executor, targetHost, targetPort, "")
+func StartHTTPServer(addr, nodeID, executor, targetHost, targetPort string) *http.Server {
+	return StartHTTPServerWithAllowedAdmin(addr, nodeID, executor, targetHost, targetPort, "")
 }
 
-func StartHTTPServerWithAllowedAdmin(addr, nodeID, executor, targetHost, targetPort, allowedAdminIP string) {
+func StartHTTPServerWithAllowedAdmin(addr, nodeID, executor, targetHost, targetPort, allowedAdminIP string) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", allowedHandler(allowedAdminIP, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, EndpointInfo{
@@ -93,7 +93,7 @@ func StartHTTPServerWithAllowedAdmin(addr, nodeID, executor, targetHost, targetP
 	bindAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		slog.Warn("internal HTTP server address is invalid; skipping local listener", "addr", addr, "error", err)
-		return
+		return nil
 	}
 	server := &http.Server{
 		Addr:              bindAddr.String(),
@@ -107,6 +107,7 @@ func StartHTTPServerWithAllowedAdmin(addr, nodeID, executor, targetHost, targetP
 			slog.Warn("internal HTTP server stopped", "error", err)
 		}
 	}()
+	return server
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
