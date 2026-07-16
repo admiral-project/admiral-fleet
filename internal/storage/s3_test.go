@@ -218,6 +218,20 @@ func TestGetObject(t *testing.T) {
 	}
 }
 
+func TestGetObjectLimitedRejectsOversizedObject(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("oversized"))
+	}))
+	defer server.Close()
+
+	c := NewS3Client(server.URL, "us-east-1", "bucket", "", "a", "s", true)
+	c.httpClient = server.Client()
+
+	if _, err := c.GetObjectLimited(context.Background(), "mykey", int64(len("oversized")-1)); err == nil {
+		t.Fatal("expected oversized object to be rejected")
+	}
+}
+
 func TestDeleteObject(t *testing.T) {
 	var gotMethod string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

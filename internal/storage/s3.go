@@ -66,6 +66,13 @@ func (c *S3Client) PutObject(ctx context.Context, key string, data []byte) error
 }
 
 func (c *S3Client) GetObject(ctx context.Context, key string) ([]byte, error) {
+	return c.GetObjectLimited(ctx, key, 0)
+}
+
+// GetObjectLimited downloads an object and rejects responses larger than limit.
+// A non-positive limit preserves the historical unbounded behavior for callers
+// that have an explicit reason to accept arbitrary object sizes.
+func (c *S3Client) GetObjectLimited(ctx context.Context, key string, limit int64) ([]byte, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, key, nil)
 	if err != nil {
 		return nil, err
@@ -80,7 +87,17 @@ func (c *S3Client) GetObject(ctx context.Context, key string) ([]byte, error) {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("s3 get %q: http %d: %s", key, resp.StatusCode, string(body))
 	}
-	return io.ReadAll(resp.Body)
+	if limit <= 0 {
+		return io.ReadAll(resp.Body)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("s3 get %q: read body: %w", key, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("s3 get %q: object exceeds maximum size of %d bytes", key, limit)
+	}
+	return data, nil
 }
 
 func (c *S3Client) DeleteObject(ctx context.Context, key string) error {

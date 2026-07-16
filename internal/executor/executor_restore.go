@@ -179,7 +179,7 @@ func (e *SystemdPodmanExecutor) downloadS3Artifact(ctx context.Context, task adm
 	if err != nil {
 		return "", fmt.Errorf("init S3 client for restore: %w", err)
 	}
-	data, err := s3Client.GetObject(ctx, task.Restore.StorageKey)
+	data, err := s3Client.GetObjectLimited(ctx, task.Restore.StorageKey, maxRestoreArtifactBytes)
 	if err != nil {
 		return "", fmt.Errorf("download from S3: %w", err)
 	}
@@ -292,7 +292,7 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 		return "", fmt.Errorf("create restore artifact file: %w", err)
 	}
 	defer file.Close()
-	if _, err := io.Copy(file, resp.Body); err != nil {
+	if err := copyWithLimit(file, resp.Body, maxRestoreArtifactBytes, "restore artifact"); err != nil {
 		return "", fmt.Errorf("save restore artifact: %w", err)
 	}
 	return path, nil
