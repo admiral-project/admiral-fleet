@@ -240,7 +240,9 @@ func (a *Agent) StartReconciler(ctx context.Context, interval time.Duration) {
 
 func (a *Agent) HandleTask(task admiral.FleetTask) error {
 	if a.outbox != nil {
-		_ = a.outbox.flush(a.send)
+		if err := a.outbox.flush(a.send); err != nil {
+			slog.Warn("failed to flush task result outbox", "error", err)
+		}
 	}
 	exec := a.executor
 	if exec == nil {
@@ -249,12 +251,16 @@ func (a *Agent) HandleTask(task admiral.FleetTask) error {
 	result := exec.Execute(context.Background(), task, a.NodeID)
 	if err := a.send(result); err != nil {
 		if a.outbox != nil {
-			_ = a.outbox.enqueue(result)
+			if enqueueErr := a.outbox.enqueue(result); enqueueErr != nil {
+				slog.Error("failed to persist task result in outbox", "task_id", task.TaskID, "error", enqueueErr)
+			}
 		}
 		return err
 	}
 	if a.outbox != nil {
-		_ = a.outbox.flush(a.send)
+		if err := a.outbox.flush(a.send); err != nil {
+			slog.Warn("failed to flush task result outbox", "error", err)
+		}
 	}
 	return nil
 }

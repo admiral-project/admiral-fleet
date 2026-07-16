@@ -69,12 +69,10 @@ func main() {
 		}
 
 		stopRenew := fleetAgent.StartLeaseRenewer(commandID)
-		result := exec.Execute(context.Background(), *task, cfg.NodeID)
-		stopRenew()
-
-		if err := fleetAgent.SendResult(result); err != nil {
+		if err := fleetAgent.HandleTask(*task); err != nil {
 			slog.Error("failed to send callback", "task_id", task.TaskID, "error", err)
 		}
+		stopRenew()
 	}
 }
 

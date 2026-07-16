@@ -72,7 +72,6 @@ func (o *outbox) flush(send func(admiral.TaskResult) error) error {
 			continue
 		}
 		if err := send(result); err != nil {
-			_ = os.Remove(path)
 			return err
 		}
 		_ = os.Remove(path)

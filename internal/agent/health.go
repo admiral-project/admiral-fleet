@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -82,7 +83,7 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 		}
 
 		if err := a.postHealth(report); err != nil {
-			_ = err
+			slog.Warn("health report failed", "instance_id", report.InstanceID, "error", err)
 		}
 	}
 
@@ -97,7 +98,7 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 				CheckedAt:    time.Now().UTC().Format(time.RFC3339),
 			}
 			if err := a.postHealth(report); err != nil {
-				_ = err
+				slog.Warn("health report failed", "instance_id", report.InstanceID, "error", err)
 			}
 		}
 	}
@@ -245,7 +246,7 @@ func (a *Agent) checkInstanceStorage(ctx context.Context) {
 			continue
 		}
 		if err := a.postStorage(*report); err != nil {
-			_ = err
+			slog.Warn("storage report failed", "instance_id", report.InstanceID, "error", err)
 		}
 	}
 }

@@ -256,10 +256,10 @@ func TestOutboxFlushStopsOnSendError(t *testing.T) {
 		t.Fatal("expected error from flush")
 	}
 
-	// second file should remain
+	// Both files should remain for a later retry.
 	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 remaining file, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected both outbox files to remain, got %d", len(entries))
 	}
 }
 
