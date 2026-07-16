@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -446,8 +447,12 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 		if err != nil {
 			return false, err
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}()
 		if resp.StatusCode != expectedStatus {
+			_, _ = io.Copy(io.Discard, resp.Body)
 			return false, fmt.Errorf("service %q http healthcheck returned %d, expected %d", svc.Name, resp.StatusCode, expectedStatus)
 		}
 		return true, nil

@@ -88,7 +88,7 @@ func (a *Agent) postHeartbeat(req admiral.HeartbeatRequest) error {
 	if err != nil {
 		return fmt.Errorf("send heartbeat: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndCloseResponse(resp)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("heartbeat failed with HTTP %d", resp.StatusCode)

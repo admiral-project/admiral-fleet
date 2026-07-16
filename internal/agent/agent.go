@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -93,7 +94,7 @@ func (a *Agent) ClaimTask() (*admiral.FleetTask, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("claim task: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndCloseResponse(resp)
 
 	if resp.StatusCode == http.StatusNoContent {
 		return nil, "", ErrNoTaskAvailable
@@ -161,7 +162,7 @@ func (a *Agent) ReportRunning(commandID string) error {
 	if err != nil {
 		return fmt.Errorf("report running: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndCloseResponse(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("report running returned HTTP %d", resp.StatusCode)
 	}
@@ -180,7 +181,7 @@ func (a *Agent) RenewLease(commandID string) error {
 	if err != nil {
 		return fmt.Errorf("renew lease: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndCloseResponse(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("renew lease returned HTTP %d", resp.StatusCode)
 	}
@@ -275,7 +276,7 @@ func (a *Agent) postStorage(report admiral.StorageReport) error {
 	if err != nil {
 		return fmt.Errorf("send storage report: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndCloseResponse(resp)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("storage report failed with HTTP %d", resp.StatusCode)
@@ -351,7 +352,7 @@ func (a *Agent) FetchTaskEncryptionKey() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("fetch task-encryption-key: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndCloseResponse(resp)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("task-encryption-key returned HTTP %d", resp.StatusCode)
@@ -386,10 +387,15 @@ func (a *Agent) send(result admiral.TaskResult) error {
 	if err != nil {
 		return fmt.Errorf("send callback: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndCloseResponse(resp)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("callback failed with HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func drainAndCloseResponse(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 }

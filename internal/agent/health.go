@@ -487,7 +487,7 @@ func (a *Agent) postHealth(report healthReport) error {
 	if err != nil {
 		return fmt.Errorf("send health: %w", err)
 	}
-	defer resp.Body.Close()
+	defer drainAndCloseResponse(resp)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("health callback failed with HTTP %d", resp.StatusCode)

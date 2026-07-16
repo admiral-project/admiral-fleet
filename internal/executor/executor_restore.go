@@ -269,8 +269,12 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 	if err != nil {
 		return "", fmt.Errorf("download restore artifact: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return "", fmt.Errorf("download restore artifact: http %d", resp.StatusCode)
 	}
 
