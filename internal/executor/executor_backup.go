@@ -349,9 +349,12 @@ func (e *SystemdPodmanExecutor) collectVolumeTar(ctx context.Context, task admir
 				if err != nil {
 					return err
 				}
-				defer f.Close()
 				if _, err := io.Copy(tw, f); err != nil {
+					_ = f.Close()
 					return err
+				}
+				if err := f.Close(); err != nil {
+					return fmt.Errorf("close archived file %q: %w", path, err)
 				}
 			}
 			return nil
