@@ -151,6 +151,15 @@ func (f fakeUserLookup) Lookup(_ string) (*user.User, error) {
 	return &user.User{Uid: "1000", Gid: "1000"}, nil
 }
 
+func testRootlessUser(t *testing.T) string {
+	t.Helper()
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("lookup current test user: %v", err)
+	}
+	return current.Username
+}
+
 func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 	runner := &fakeSystemdRunner{}
 	manager := systemd.NewManager(runner)
@@ -300,7 +309,7 @@ func TestSystemdPodmanExecutorInspectAppSnapshot(t *testing.T) {
 func TestSystemdPodmanExecutorBackupUsesPodInfraContainer(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", testRootlessUser(t), fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_3",
@@ -377,7 +386,7 @@ func TestSystemdPodmanExecutorRestorePostgresUsesCleanRestore(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatalf("close dump: %v", err)
 	}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", dir, "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", dir, testRootlessUser(t), fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_5",
@@ -465,7 +474,7 @@ func TestSystemdPodmanExecutorRestoreUnpausesPausedPod(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatalf("close dump: %v", err)
 	}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", dir, "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", dir, testRootlessUser(t), fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_6",
