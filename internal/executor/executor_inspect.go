@@ -51,7 +51,7 @@ func (e *SystemdPodmanExecutor) inspectSnapshot(ctx context.Context, task admira
 			"container":         containerName,
 			"container_unit":    unitName,
 			"container_status":  strings.TrimSpace(string(unitStatus)),
-			"container_inspect": mustJSONValue(containerInspect),
+			"container_inspect": sanitizedInspectJSONValue(containerInspect),
 		}
 		if svc.Volume != "" {
 			volName := volumeName(task.InstanceID, svc.Name)
@@ -85,6 +85,37 @@ func mustJSONValue(data []byte) interface{} {
 		return string(data)
 	}
 	return v
+}
+
+func sanitizedInspectJSONValue(data []byte) interface{} {
+	value := mustJSONValue(data)
+	redactInspectEnvironment(value)
+	return value
+}
+
+func redactInspectEnvironment(value interface{}) {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for key, child := range typed {
+			if strings.EqualFold(key, "Env") {
+				if env, ok := child.([]interface{}); ok {
+					for i, entry := range env {
+						if text, ok := entry.(string); ok {
+							if name, _, found := strings.Cut(text, "="); found {
+								env[i] = name + "=[REDACTED]"
+							}
+						}
+					}
+					continue
+				}
+			}
+			redactInspectEnvironment(child)
+		}
+	case []interface{}:
+		for _, child := range typed {
+			redactInspectEnvironment(child)
+		}
+	}
 }
 
 func (e *SystemdPodmanExecutor) startMetadata(ctx context.Context, task admiral.FleetTask) (string, error) {
