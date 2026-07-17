@@ -391,44 +391,6 @@ func (a *Agent) warnIfNoBackupStorage() {
 	}
 }
 
-// FetchTaskEncryptionKey retrieves the shared AES-256-GCM task encryption key
-// from admirald over the network. The request is authenticated with the
-// per-node fleet token.
-//
-// This is a network fallback for environments where the key cannot be
-// distributed via environment variable. Prefer setting
-// ADMIRAL_TASK_ENCRYPTION_KEY in the fleet environment to avoid sending
-// the key over the network.
-func (a *Agent) FetchTaskEncryptionKey() (string, error) {
-	slog.Warn("fetching task encryption key over network; prefer ADMIRAL_TASK_ENCRYPTION_KEY in local environment")
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, a.APIURL+"/api/v1/nodes/task-encryption-key", nil)
-	if err != nil {
-		return "", fmt.Errorf("create task-encryption-key request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
-
-	resp, err := a.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("fetch task-encryption-key: %w", err)
-	}
-	defer drainAndCloseResponse(resp)
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("task-encryption-key returned HTTP %d", resp.StatusCode)
-	}
-
-	var result struct {
-		TaskEncryptionKey string `json:"task_encryption_key"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode task-encryption-key response: %w", err)
-	}
-	if result.TaskEncryptionKey == "" {
-		return "", fmt.Errorf("task-encryption-key response is empty")
-	}
-	return result.TaskEncryptionKey, nil
-}
-
 func (a *Agent) send(result admiral.TaskResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
