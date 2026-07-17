@@ -352,7 +352,7 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 		return "", fmt.Errorf("create restore staging dir: %w", err)
 	}
 	path := filepath.Join(dir, "artifact.bin")
-	file, err := e.FS.Create(path)
+	file, err := e.FS.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return "", fmt.Errorf("create restore artifact file: %w", err)
 	}
