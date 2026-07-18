@@ -5,7 +5,10 @@ package agent
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -380,6 +383,380 @@ func TestExtractInstanceID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSendResult_And_FlushOutbox(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		APIURL: server.URL,
+		http:   server.Client(),
+		outbox: &outbox{dir: t.TempDir()},
+	}
+
+	res := admiral.TaskResult{TaskID: "t_result"}
+	err := ag.SendResult(res)
+	if err != nil {
+		t.Fatalf("unexpected error on SendResult: %v", err)
+	}
+
+	err = ag.FlushOutbox()
+	if err != nil {
+		t.Fatalf("unexpected error on FlushOutbox: %v", err)
+	}
+
+	agNoOutbox := &Agent{}
+	err = agNoOutbox.FlushOutbox()
+	if err != nil {
+		t.Fatalf("unexpected error on FlushOutbox with nil outbox: %v", err)
+	}
+}
+
+func TestStartBackupStorageWarner_Exit(t *testing.T) {
+	ag := &Agent{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Warner should exit immediately because context is cancelled
+	ag.StartBackupStorageWarner(ctx)
+}
+
+func TestPostHeartbeat_AllCases(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer bad" {
+			w.WriteHeader(http.StatusUnauthorized)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		APIURL:     server.URL,
+		FleetToken: "tok",
+		http:       server.Client(),
+	}
+
+	req := admiral.HeartbeatRequest{NodeID: "test-node"}
+	err := ag.postHeartbeat(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	agBad := &Agent{
+		APIURL:     server.URL,
+		FleetToken: "bad",
+		http:       server.Client(),
+	}
+	err = agBad.postHeartbeat(req)
+	if err == nil {
+		t.Fatal("expected error with unauthorized request")
+	}
+}
+
+func TestStartHeartbeatSender_Cancel(t *testing.T) {
+	ag := &Agent{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Should exit immediately without panic or hanging
+	ag.StartHeartbeatSender(ctx)
+}
+
+func TestIPAllowed(t *testing.T) {
+	tests := []struct {
+		name           string
+		remoteAddr     string
+		allowedAdminIP string
+		expected       bool
+	}{
+		{"loopback ipv4", "127.0.0.1:1234", "", true},
+		{"loopback ipv6", "[::1]:1234", "", true},
+		{"matched admin ip", "192.168.1.100:1234", "192.168.1.100", true},
+		{"mismatched admin ip", "192.168.1.100:1234", "192.168.1.200", false},
+		{"mismatched non-loopback ip", "192.168.1.100:1234", "", false},
+		{"invalid remote addr", "invalid-ip", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ipAllowed(tt.remoteAddr, tt.allowedAdminIP)
+			if got != tt.expected {
+				t.Errorf("ipAllowed(%q, %q) = %v, want %v", tt.remoteAddr, tt.allowedAdminIP, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestHTTPServer_ReadyAndAllowedAdmin(t *testing.T) {
+	addr := "127.0.0.1:19091"
+	srv := StartHTTPServerWithAllowedAdmin(addr, "node_test", "simulated", "host", "port", "127.0.0.1")
+	if srv == nil {
+		t.Fatal("expected server to start")
+	}
+	defer srv.Close()
+
+	// Wait a moment for server to listen
+	time.Sleep(100 * time.Millisecond)
+
+	client := &http.Client{}
+
+	// 1. Get health (should succeed because we request from localhost/loopback)
+	resp, err := client.Get("http://" + addr + "/health")
+	if err != nil {
+		t.Fatalf("Get /health: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+
+	// 2. Get ready
+	resp2, err := client.Get("http://" + addr + "/ready")
+	if err != nil {
+		t.Fatalf("Get /ready: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp2.StatusCode)
+	}
+	var ready ReadyInfo
+	json.NewDecoder(resp2.Body).Decode(&ready)
+	if ready.Status != "ok" {
+		t.Errorf("expected ready.Status ok, got %q", ready.Status)
+	}
+
+	// 3. Test allowedHandler with a mismatched IP (we can fake a custom request or handler directly if remote addr is hard to fake on actual server)
+	handler := allowedHandler("192.168.10.10", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	req, _ := http.NewRequest("GET", "/health", nil)
+	req.RemoteAddr = "192.168.10.20:1234"
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden for mismatched remote IP, got %d", rr.Code)
+	}
+}
+
+func TestClaimTaskContext_AllCases(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubHex := hex.EncodeToString(pub)
+
+	tests := []struct {
+		name         string
+		statusCode   int
+		respBodyFunc func() interface{}
+		pubKeyHex    string
+		wantErr      bool
+		errContains  string
+	}{
+		{
+			name:       "No Content (no task)",
+			statusCode: http.StatusNoContent,
+			respBodyFunc: func() interface{} {
+				return nil
+			},
+			pubKeyHex:   pubHex,
+			wantErr:     true,
+			errContains: "no task available",
+		},
+		{
+			name:       "Server Error",
+			statusCode: http.StatusInternalServerError,
+			respBodyFunc: func() interface{} {
+				return nil
+			},
+			pubKeyHex:   pubHex,
+			wantErr:     true,
+			errContains: "claim task returned HTTP 500",
+		},
+		{
+			name:       "Missing Task or CommandID",
+			statusCode: http.StatusOK,
+			respBodyFunc: func() interface{} {
+				return map[string]interface{}{"command_id": ""}
+			},
+			pubKeyHex:   pubHex,
+			wantErr:     true,
+			errContains: "invalid claim response",
+		},
+		{
+			name:       "Unsigned Task rejected",
+			statusCode: http.StatusOK,
+			respBodyFunc: func() interface{} {
+				return map[string]interface{}{
+					"command_id": "cmd_123",
+					"task": &admiral.FleetTask{
+						TaskID: "task_123",
+					},
+				}
+			},
+			pubKeyHex:   pubHex,
+			wantErr:     true,
+			errContains: "task signature is required but missing",
+		},
+		{
+			name:       "Signed Task without verification key",
+			statusCode: http.StatusOK,
+			respBodyFunc: func() interface{} {
+				return map[string]interface{}{
+					"command_id": "cmd_123",
+					"task": &admiral.FleetTask{
+						TaskID:        "task_123",
+						TaskSignature: "sig",
+					},
+				}
+			},
+			pubKeyHex:   "",
+			wantErr:     true,
+			errContains: "task public key is not configured",
+		},
+		{
+			name:       "Valid signed task",
+			statusCode: http.StatusOK,
+			respBodyFunc: func() interface{} {
+				task := &admiral.FleetTask{
+					TaskID:   "task_123",
+					SignedAt: time.Now().Unix(),
+				}
+				verifyTask := *task
+				verifyTask.TaskSignature = ""
+				verifyTask.SignedAt = 0
+				payload, _ := json.Marshal(verifyTask)
+				msg := append(payload, []byte(fmt.Sprintf("%d", task.SignedAt))...)
+				sig := ed25519.Sign(priv, msg)
+				task.TaskSignature = hex.EncodeToString(sig)
+
+				return map[string]interface{}{
+					"command_id": "cmd_123",
+					"task":       task,
+				}
+			},
+			pubKeyHex: pubHex,
+			wantErr:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				if tt.statusCode == http.StatusOK {
+					json.NewEncoder(w).Encode(tt.respBodyFunc())
+				}
+			}))
+			defer server.Close()
+
+			ag, err := New("node_1", server.URL, "token", "", t.TempDir(), "", "", "", "", tt.pubKeyHex, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ag.http = server.Client()
+
+			task, cmdID, err := ag.ClaimTask()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("expected error containing %q, got %v", tt.errContains, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if cmdID != "cmd_123" {
+					t.Errorf("expected command_id cmd_123, got %q", cmdID)
+				}
+				if task.TaskID != "task_123" {
+					t.Errorf("expected task_id task_123, got %q", task.TaskID)
+				}
+			}
+		})
+	}
+}
+
+func TestReportRunning_AllCases(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/fleet/tasks/cmd_ok/running" {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		APIURL: server.URL,
+		http:   server.Client(),
+	}
+
+	err := ag.ReportRunning("cmd_ok")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	err = ag.ReportRunning("cmd_bad")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestRenewLease_AllCases(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/fleet/tasks/cmd_ok/renew-lease" {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		APIURL: server.URL,
+		http:   server.Client(),
+	}
+
+	err := ag.RenewLease("cmd_ok")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	err = ag.RenewLease("cmd_bad")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestStartLeaseRenewer_Close(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		APIURL: server.URL,
+		http:   server.Client(),
+	}
+
+	stop := ag.StartLeaseRenewer("cmd_123")
+	stop() // stop immediately
+}
+
+func TestStartReconciler_Cancel(t *testing.T) {
+	ag := &Agent{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Reconciler should exit immediately because context is cancelled
+	ag.StartReconciler(ctx, time.Millisecond)
 }
 
 func TestWarnIfNoBackupStorage(t *testing.T) {

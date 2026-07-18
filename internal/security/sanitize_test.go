@@ -35,6 +35,78 @@ func TestSanitize(t *testing.T) {
 	}
 }
 
+func TestValidateInstanceID(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		{"safe ID", "instance-123_abc", false},
+		{"empty ID", "", true},
+		{"path traversal", "instance/../../etc", true},
+		{"path separator slash", "instance/abc", true},
+		{"path separator backslash", "instance\\abc", true},
+		{"null byte", "instance\x00abc", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateInstanceID(tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateInstanceID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateOperationID(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		{"safe ID", "op-123_abc", false},
+		{"empty ID", "", true},
+		{"path traversal", "op/../../etc", true},
+		{"path separator slash", "op/abc", true},
+		{"path separator backslash", "op\\abc", true},
+		{"null byte", "op\x00abc", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateOperationID(tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateOperationID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateBackupID(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		{"safe ID", "backup-123_abc", false},
+		{"empty ID", "", true},
+		{"path traversal", "backup/../../etc", true},
+		{"path separator slash", "backup/abc", true},
+		{"path separator backslash", "backup\\abc", true},
+		{"null byte", "backup\x00abc", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateBackupID(tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateBackupID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestSanitizeArgs(t *testing.T) {
 	args := []string{"mysql", "-u", "root", "MYSQL_PWD=secret", "mydb"}
 	expected := []string{"mysql", "-u", "root", "MYSQL_PWD=[REDACTED]", "mydb"}

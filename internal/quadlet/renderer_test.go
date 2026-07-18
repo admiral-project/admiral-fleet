@@ -555,3 +555,131 @@ func TestSanitizeEnvValueAllowsNormalValue(t *testing.T) {
 		t.Fatalf("expected normal value unchanged, got %q", got)
 	}
 }
+
+func TestRendererRemoveMethod(t *testing.T) {
+	quadletDir := t.TempDir()
+	dataDir := t.TempDir()
+	renderer := NewRenderer(quadletDir, dataDir)
+
+	task := admiral.FleetTask{
+		InstanceID: "demo005",
+		Services: []admiral.ServiceInfo{
+			{
+				Name:  "app",
+				Image: "docker.io/library/nginx:alpine",
+			},
+		},
+	}
+
+	if err := renderer.Render(task); err != nil {
+		t.Fatalf("render quadlet: %v", err)
+	}
+
+	podFile := filepath.Join(quadletDir, PodFileName("demo005"))
+	containerFile := filepath.Join(quadletDir, ContainerFileName("demo005", "app"))
+
+	if _, err := os.Stat(podFile); err != nil {
+		t.Fatalf("expected pod file to exist: %v", err)
+	}
+	if _, err := os.Stat(containerFile); err != nil {
+		t.Fatalf("expected container file to exist: %v", err)
+	}
+
+	// Now remove the files via renderer.Remove
+	if err := renderer.Remove("demo005"); err != nil {
+		t.Fatalf("expected nil error on Remove, got %v", err)
+	}
+
+	if _, err := os.Stat(podFile); !os.IsNotExist(err) {
+		t.Fatalf("expected pod file to be deleted")
+	}
+	if _, err := os.Stat(containerFile); !os.IsNotExist(err) {
+		t.Fatalf("expected container file to be deleted")
+	}
+}
+
+func TestUnitNameHelpers(t *testing.T) {
+	if got := PodUnitName("inst1"); got != "admiral-inst1-pod.service" {
+		t.Errorf("unexpected PodUnitName: %q", got)
+	}
+	if got := VolumeUnitName("inst1", "svc1"); got != "admiral-inst1-svc1-volume.service" {
+		t.Errorf("unexpected VolumeUnitName: %q", got)
+	}
+	if got := SharedVolumeUnitName("inst1", "vol1"); got != "admiral-inst1-shared-vol1-volume.service" {
+		t.Errorf("unexpected SharedVolumeUnitName: %q", got)
+	}
+}
+
+func TestDefaultVolumeTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		image    string
+		svcName  string
+		expected string
+	}{
+		{"postgres image", "docker.io/library/postgres:16", "app", "/var/lib/postgresql/data"},
+		{"mariadb image", "docker.io/library/mariadb:10.11", "app", "/var/lib/mysql"},
+		{"mysql image", "docker.io/library/mysql:8", "app", "/var/lib/mysql"},
+		{"wordpress image", "docker.io/library/wordpress:latest", "app", "/var/www/html/wp-content"},
+		{"db service name", "docker.io/library/alpine", "db", "/var/lib/postgresql/data"},
+		{"general case", "docker.io/library/alpine", "app", "/data"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := admiral.ServiceInfo{
+				Name:  tc.svcName,
+				Image: tc.image,
+			}
+			got := defaultVolumeTarget(svc)
+			if got != tc.expected {
+				t.Errorf("defaultVolumeTarget(%+v) = %q; want %q", svc, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestRenderErrorScenarios(t *testing.T) {
+	quadletDir := t.TempDir()
+	dataDir := t.TempDir()
+
+	// 1. Invalid publish address
+	orig := os.Getenv("ADMIRAL_FLEET_PUBLISH_ADDRESS")
+	os.Setenv("ADMIRAL_FLEET_PUBLISH_ADDRESS", "invalid-ip")
+	defer os.Setenv("ADMIRAL_FLEET_PUBLISH_ADDRESS", orig)
+
+	renderer := NewRenderer(quadletDir, dataDir)
+	task := admiral.FleetTask{
+		InstanceID: "demo006",
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "docker.io/library/nginx:alpine"},
+		},
+	}
+
+	err := renderer.Render(task)
+	if err == nil {
+		t.Fatal("expected error with invalid publish address IP")
+	}
+	if !strings.Contains(err.Error(), "publish address must be a specific") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// Restore publish address for the next test
+	os.Setenv("ADMIRAL_FLEET_PUBLISH_ADDRESS", "127.0.0.1")
+	renderer2 := NewRenderer(quadletDir, dataDir)
+
+	// 2. Invalid InstanceID
+	task2 := admiral.FleetTask{
+		InstanceID: "../invalid-id",
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "docker.io/library/nginx:alpine"},
+		},
+	}
+	err = renderer2.Render(task2)
+	if err == nil {
+		t.Fatal("expected error with invalid instance ID (path traversal)")
+	}
+	if !strings.Contains(err.Error(), "invalid instance_id") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
