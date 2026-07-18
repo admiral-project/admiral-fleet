@@ -444,7 +444,7 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 			pingCmd = "mariadb-admin"
 		}
 		for i := 0; i < 15; i++ {
-			out, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"MYSQL_PWD": password}, pingCmd, "ping", "-u", username, "--silent")
+			out, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"MYSQL_PWD": password}, pingCmd, "-h", "127.0.0.1", "ping", "-u", username, "--silent")
 			if err == nil && strings.TrimSpace(string(out)) == "mysqld is alive" {
 				break
 			}
@@ -490,11 +490,11 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 		if dbEngine == "mariadb" || strings.Contains(strings.ToLower(svc.Image), "mariadb") {
 			restoreCmd = "mariadb"
 		}
-		if _, err := e.podman().ExecWithStdin(ctx, container, map[string]string{"MYSQL_PWD": password}, bytes.NewReader(dumpData), restoreCmd, "-u", username, databaseName); err != nil {
+		if _, err := e.podman().ExecWithStdin(ctx, container, map[string]string{"MYSQL_PWD": password}, bytes.NewReader(dumpData), restoreCmd, "-h", "127.0.0.1", "-u", username, databaseName); err != nil {
 			return fmt.Errorf("run %s restore in container %q: %w", restoreCmd, container, err)
 		}
 	default:
-		if _, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"PGPASSWORD": password}, "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-privileges", "-Fc", "-U", username, "-d", databaseName, "/tmp/admiral-restore.dump"); err != nil {
+		if _, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"PGPASSWORD": password}, "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-privileges", "-Fc", "-h", "127.0.0.1", "-U", username, "-d", databaseName, "/tmp/admiral-restore.dump"); err != nil {
 			return fmt.Errorf("run pg_restore in container %q: %w", container, err)
 		}
 	}

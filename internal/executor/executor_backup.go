@@ -269,7 +269,7 @@ func (e *SystemdPodmanExecutor) collectPostgresBackup(ctx context.Context, task 
 	if !ok || strings.TrimSpace(password) == "" {
 		return nil, fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
 	}
-	return e.podman().ExecWithEnv(ctx, executionContainerNameForService(task, svc), map[string]string{"PGPASSWORD": password}, "pg_dump", "-Fc", "-U", username, databaseName)
+	return e.podman().ExecWithEnv(ctx, executionContainerNameForService(task, svc), map[string]string{"PGPASSWORD": password}, "pg_dump", "-Fc", "-h", "127.0.0.1", "-U", username, databaseName)
 }
 
 func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task admiral.FleetTask, svc admiral.ServiceInfo) ([]byte, error) {
@@ -289,7 +289,7 @@ func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task adm
 	if strings.EqualFold(task.Backup.DatabaseType, "mariadb") || strings.Contains(strings.ToLower(svc.Image), "mariadb") {
 		dumpCmd = "mariadb-dump"
 	}
-	data, err := e.podman().ExecWithEnv(ctx, executionContainerNameForService(task, svc), map[string]string{"MYSQL_PWD": password}, dumpCmd, "--single-transaction", "--quick", "--routines", "--events", "--triggers", "--skip-lock-tables", "-u", username, databaseName)
+	data, err := e.podman().ExecWithEnv(ctx, executionContainerNameForService(task, svc), map[string]string{"MYSQL_PWD": password}, dumpCmd, "--single-transaction", "--quick", "--routines", "--events", "--triggers", "--skip-lock-tables", "-h", "127.0.0.1", "-u", username, databaseName)
 	if err == nil {
 		return data, nil
 	}
