@@ -504,3 +504,68 @@ func TestInspectorSecretMethodsErrorCases(t *testing.T) {
 		t.Errorf("SecretRemove error = %v, want %v", err, wantErr)
 	}
 }
+
+type unsupportedRunner struct{}
+
+func (unsupportedRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return nil, nil
+}
+
+func TestRunAsUserWithStdinTrusted_UnsupportedRunner(t *testing.T) {
+	currentUser, err := user.Current()
+	if err != nil {
+		t.Fatalf("current user: %v", err)
+	}
+
+	inspector := &Inspector{
+		Runner:       unsupportedRunner{},
+		RootlessUser: currentUser.Username,
+	}
+
+	ctx := context.Background()
+	stdin := strings.NewReader("some stdin payload")
+	_, err = inspector.runAsUserWithStdinTrusted(ctx, stdin, "run", "dummy")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not support stdin") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestTrustedCommand(t *testing.T) {
+	ctx := context.Background()
+
+	// Successful trusted command run
+	out, err := trustedCommand(ctx, nil, "true")
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("expected empty output, got %q", string(out))
+	}
+
+	// Failed trusted command run
+	_, err = trustedCommand(ctx, nil, "false")
+	if err == nil {
+		t.Fatal("expected error running false, got nil")
+	}
+}
+
+func TestInspector_Exec(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	_, err := inspector.Exec(context.Background(), "my-container", "ls")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(runner.calls))
+	}
+	if runner.calls[0].args[0] != "exec" {
+		t.Errorf("expected 'exec', got %q", runner.calls[0].args[0])
+	}
+}
