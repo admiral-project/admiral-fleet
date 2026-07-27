@@ -51,6 +51,13 @@ admiral-fleet
 
 \* Required if using remote backup storage.
 
+> **Note:** On dedicated `--worker-node` installs the official Ansible
+> playbooks set `ADMIRAL_FLEET_HTTP_ADDR` to the node WireGuard address
+> (`10.99.0.x:9099`) so `admirald` can reach `/health`, `/ready` and
+> `/endpoint` through the VPN. Requests are accepted only from the hub
+> WireGuard IP (`ADMIRAL_FLEET_ADMIN_WIREGUARD_IP`); on single-node
+> installs the server stays on loopback.
+
 ## Executors
 
 - `systemd-podman` (production) — generates Quadlet `.pod`, `.container`, and `.volume` files, managed via systemd
