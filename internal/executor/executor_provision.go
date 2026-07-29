@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -420,7 +421,7 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 		if !ok || hostPort <= 0 {
 			return false, fmt.Errorf("service %q tcp healthcheck requires a published port", svc.Name)
 		}
-		conn, err := (&net.Dialer{Timeout: timeout}).DialContext(checkCtx, "tcp", fmt.Sprintf("127.0.0.1:%d", hostPort))
+		conn, err := (&net.Dialer{Timeout: timeout}).DialContext(checkCtx, "tcp", e.publishedHealthcheckAddress(hostPort))
 		if err != nil {
 			return false, err
 		}
@@ -439,7 +440,7 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 		if expectedStatus == 0 {
 			expectedStatus = http.StatusOK
 		}
-		req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", hostPort, path), nil)
+		req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, "http://"+e.publishedHealthcheckAddress(hostPort)+path, nil)
 		if err != nil {
 			return false, err
 		}
@@ -459,6 +460,14 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 	default:
 		return false, fmt.Errorf("service %q healthcheck type %q is unsupported", svc.Name, svc.HealthCheck.Type)
 	}
+}
+
+func (e *SystemdPodmanExecutor) publishedHealthcheckAddress(hostPort int) string {
+	address := strings.TrimSpace(e.renderer().PublishAddress)
+	if address == "" {
+		address = "127.0.0.1"
+	}
+	return net.JoinHostPort(address, strconv.Itoa(hostPort))
 }
 
 func extractContainerStatus(inspect []byte) string {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
@@ -41,5 +42,23 @@ func TestSimulatedExecutorRejectsUnknownAction(t *testing.T) {
 	res := exec.Execute(context.Background(), admiral.FleetTask{NodeID: "node_1", Action: admiral.TaskAction("bad_action")}, "node_1")
 	if res.Success {
 		t.Fatal("expected unknown action to fail")
+	}
+}
+
+func TestPublishedHealthcheckAddressUsesPublishAddress(t *testing.T) {
+	exec := &SystemdPodmanExecutor{
+		Renderer: &quadlet.Renderer{PublishAddress: "10.99.0.2"},
+	}
+	if got := exec.publishedHealthcheckAddress(40000); got != "10.99.0.2:40000" {
+		t.Fatalf("published healthcheck address = %q, want %q", got, "10.99.0.2:40000")
+	}
+}
+
+func TestPublishedHealthcheckAddressDefaultsToLoopback(t *testing.T) {
+	exec := &SystemdPodmanExecutor{
+		Renderer: &quadlet.Renderer{},
+	}
+	if got := exec.publishedHealthcheckAddress(40000); got != "127.0.0.1:40000" {
+		t.Fatalf("published healthcheck address = %q, want %q", got, "127.0.0.1:40000")
 	}
 }
