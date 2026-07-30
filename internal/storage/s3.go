@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -42,6 +43,23 @@ func NewS3Client(endpoint, region, bucket, prefix, accessKey, secretKey string, 
 		usePathStyle: usePathStyle,
 		httpClient:   &http.Client{Timeout: 60 * time.Second},
 	}
+}
+
+// ValidateEndpoint permits plain HTTP only outside production. Backup
+// credentials and customer data must use a TLS-protected S3 endpoint in
+// production, including S3-compatible services such as MinIO.
+func ValidateEndpoint(endpoint string) error {
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("invalid S3 endpoint %q", endpoint)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("S3 endpoint must use http or https")
+	}
+	if os.Getenv("ENV") == "production" && u.Scheme != "https" {
+		return fmt.Errorf("S3 endpoint must use HTTPS when ENV=production")
+	}
+	return nil
 }
 
 func (c *S3Client) PutObject(ctx context.Context, key string, data []byte) error {
@@ -199,6 +217,9 @@ func sha256Hex(data []byte) string {
 func NewS3FromConfig(cfg *admiral.StorageConfig) (*S3Client, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("storage config is nil")
+	}
+	if err := ValidateEndpoint(cfg.Endpoint); err != nil {
+		return nil, err
 	}
 	accessKey := os.Getenv("ADMIRAL_S3_ACCESS_KEY_ID")
 	secretKey := os.Getenv("ADMIRAL_S3_SECRET_ACCESS_KEY")

@@ -32,6 +32,23 @@ func TestNewS3Client(t *testing.T) {
 	}
 }
 
+func TestValidateEndpointRequiresTLSInProduction(t *testing.T) {
+	t.Setenv("ENV", "production")
+	if err := ValidateEndpoint("http://minio.example:9000"); err == nil {
+		t.Fatal("expected production HTTP endpoint to be rejected")
+	}
+	if err := ValidateEndpoint("https://minio.example:9000"); err != nil {
+		t.Fatalf("expected production HTTPS endpoint to pass: %v", err)
+	}
+}
+
+func TestValidateEndpointAllowsHTTPOutsideProduction(t *testing.T) {
+	t.Setenv("ENV", "development")
+	if err := ValidateEndpoint("http://127.0.0.1:9000"); err != nil {
+		t.Fatalf("expected development HTTP endpoint to pass: %v", err)
+	}
+}
+
 func TestNewS3ClientTrimsEndpoint(t *testing.T) {
 	c := NewS3Client("https://s3.example.com/", "us-east-1", "b", "p", "a", "s", false)
 	if c.endpoint != "https://s3.example.com" {
