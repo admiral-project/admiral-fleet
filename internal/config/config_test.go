@@ -13,7 +13,6 @@ func TestLoadRequiresTLSURLs(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_TOKEN", "token")
 	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "http://127.0.0.1:8080")
-	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "postgres://queue:pass@localhost:5432/admiral_queue?sslmode=require")
 	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 	_, err := Load()
@@ -28,7 +27,6 @@ func TestLoadAcceptsSecureURLs(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_FLEET_QUADLET_DIR", "/tmp/test-quadlet")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
-	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "postgres://queue:pass@localhost:5432/admiral_queue?sslmode=require")
 	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 	cfg, err := Load()
@@ -48,7 +46,6 @@ func TestLoadAcceptsSystemdPodmanExecutor(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_TOKEN", "token")
 	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
-	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "postgres://queue:pass@localhost:5432/admiral_queue?sslmode=require")
 	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 	setEnv(t, "ADMIRAL_FLEET_EXECUTOR", "systemd-podman")
 	setEnv(t, "ADMIRAL_FLEET_QUADLET_DIR", "/tmp/quadlet")
@@ -71,7 +68,6 @@ func TestLoadRejectsUnknownExecutor(t *testing.T) {
 	setEnv(t, "ADMIRAL_FLEET_TOKEN", "token")
 	setEnv(t, "ADMIRAL_FLEET_ROOTLESS_USER", "admiral-apps")
 	setEnv(t, "ADMIRAL_API_URL", "https://127.0.0.1:8080")
-	setEnv(t, "ADMIRAL_QUEUE_DATABASE_URL", "postgres://queue:pass@localhost:5432/admiral_queue?sslmode=require")
 	setEnv(t, "ADMIRAL_TASK_PUBLIC_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 	setEnv(t, "ADMIRAL_FLEET_EXECUTOR", "shell")
 
