@@ -608,10 +608,9 @@ func (e *SystemdPodmanExecutor) expandGzipArtifact(path string, data []byte) (st
 		base = "/var/lib/admiral"
 	}
 	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
-	if err := e.FS.MkdirAll(dir, 0755); err != nil {
+	if err := e.FS.MkdirAll(dir, 0750); err != nil {
 		return "", fmt.Errorf("create restore staging dir: %w", err)
 	}
-	e.chownRestoreDir(dir)
 	rawPath := filepath.Join(dir, "artifact.raw")
 	rawFile, err := e.FS.Create(rawPath)
 	if err != nil {
@@ -620,6 +619,9 @@ func (e *SystemdPodmanExecutor) expandGzipArtifact(path string, data []byte) (st
 	defer rawFile.Close()
 	if err := copyWithLimit(rawFile, reader, maxRestoreArtifactBytes, "restore artifact"); err != nil {
 		return "", fmt.Errorf("decompress restore artifact: %w", err)
+	}
+	if err := e.chownRestoreDir(dir); err != nil {
+		return "", err
 	}
 	return rawPath, nil
 }

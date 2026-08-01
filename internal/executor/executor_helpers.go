@@ -106,17 +106,45 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 	return nil
 }
 
-func (e *SystemdPodmanExecutor) chownRestoreDir(dir string) {
+func (e *SystemdPodmanExecutor) chownRestoreDir(dir string) error {
 	if e.RootlessUser == "" {
-		return
+		return nil
 	}
 	u, err := e.UserLookup.Lookup(e.RootlessUser)
 	if err != nil {
-		return
+		return fmt.Errorf("lookup rootless user %q: %w", e.RootlessUser, err)
 	}
-	uid, _ := strconv.Atoi(u.Uid)
-	gid, _ := strconv.Atoi(u.Gid)
-	_ = e.FS.Chown(dir, uid, gid)
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return fmt.Errorf("parse rootless uid %q: %w", u.Uid, err)
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return fmt.Errorf("parse rootless gid %q: %w", u.Gid, err)
+	}
+	base := e.DataDir
+	if strings.TrimSpace(base) == "" {
+		base = "/var/lib/admiral"
+	}
+	restoreRoot := filepath.Clean(filepath.Join(base, "restore"))
+	// The rootless user must be able to traverse down to the staging dir.
+	if err := e.FS.Chmod(restoreRoot, 0751); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("chmod restore root %q for rootless traversal: %w", restoreRoot, err)
+	}
+	// Hand the staging dir and its artifacts to the rootless user so podman cp
+	// can read the decompressed dump.
+	if err := e.FS.Walk(dir, func(path string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		return e.FS.Chown(path, uid, gid)
+	}); err != nil {
+		return fmt.Errorf("chown restore staging dir %q: %w", dir, err)
+	}
+	if err := e.FS.Chmod(dir, 0750); err != nil {
+		return fmt.Errorf("chmod restore staging dir %q: %w", dir, err)
+	}
+	return nil
 }
 
 func (e *SystemdPodmanExecutor) systemd() *systemd.Manager {
