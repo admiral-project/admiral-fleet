@@ -158,13 +158,19 @@ func (e *SystemdPodmanExecutor) systemd() *systemd.Manager {
 
 func (e *SystemdPodmanExecutor) podman() *podman.Inspector {
 	if e.Podman != nil {
-		e.Podman.RootlessUser = e.RootlessUser
+		if !e.PodmanDirect {
+			e.Podman.RootlessUser = e.RootlessUser
+		}
 		e.Podman.TempDir = filepath.Join(e.DataDir, "tmp")
 		return e.Podman
 	}
 	insp := podman.NewInspector(nil)
-	insp.RootlessUser = e.RootlessUser
 	insp.TempDir = filepath.Join(e.DataDir, "tmp")
+	if e.PodmanDirect {
+		insp.Runner = podman.UserSessionRunner{}
+	} else {
+		insp.RootlessUser = e.RootlessUser
+	}
 	return insp
 }
 

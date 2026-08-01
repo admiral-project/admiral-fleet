@@ -34,6 +34,9 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 		result.Error = fmt.Sprintf("backup service %q not found", task.Backup.Service)
 		return result
 	}
+	if e.DelegateBackup {
+		return e.delegateDataTask(ctx, task, result, helperActionBackup)
+	}
 	databaseType := normalizeDatabaseType(task.Backup.DatabaseType)
 	data, err := e.collectDatabaseBackup(ctx, task, backupSvc, databaseType)
 	if err != nil {
@@ -132,6 +135,9 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 		result.Success = false
 		result.Error = fmt.Sprintf("invalid operation_id: %v", err)
 		return result
+	}
+	if e.DelegateBackup {
+		return e.delegateDataTask(ctx, task, result, helperActionBackup)
 	}
 	base := e.DataDir
 	if strings.TrimSpace(base) == "" {

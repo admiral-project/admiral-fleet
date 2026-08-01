@@ -96,6 +96,19 @@ func (e *SystemdPodmanExecutor) restoreBackup(ctx context.Context, task admiral.
 		return result
 	}
 
+	// The fleet orchestrates the container lifecycle (re-render/start after
+	// pause) and then hands the data-plane restore to the helper running as
+	// the rootless user. The helper downloads the artifact, verifies the
+	// checksum and applies it with its own credentials.
+	if e.DelegateRestore {
+		if err := e.startRestoreContainers(ctx, task); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return result
+		}
+		return e.delegateDataTask(ctx, task, result, helperActionRestore)
+	}
+
 	artifactPath, err := e.fetchRestoreArtifact(ctx, task)
 	if err != nil {
 		result.Success = false
@@ -104,10 +117,12 @@ func (e *SystemdPodmanExecutor) restoreBackup(ctx context.Context, task admiral.
 	}
 
 	// Ensure containers are running before restore (pause may have stopped them)
-	if err := e.startRestoreContainers(ctx, task); err != nil {
-		result.Success = false
-		result.Error = err.Error()
-		return result
+	if !e.RestoreContainersReady {
+		if err := e.startRestoreContainers(ctx, task); err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return result
+		}
 	}
 
 	if err := e.applyRestoreArtifact(ctx, task, artifactPath); err != nil {

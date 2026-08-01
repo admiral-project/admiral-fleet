@@ -30,6 +30,23 @@ type SystemdPodmanExecutor struct {
 	DataDir      string
 	RootlessUser string // empty = rootful; set = rootless systemd --user target
 	portMu       sync.Mutex
+
+	// DelegateBackup and DelegateRestore run the data-plane backup/restore
+	// in the admiral-fleet-backup helper as the rootless user instead of
+	// manipulating backup artifacts as root. The fleet keeps ownership of
+	// orchestration (container lifecycle) and the helper owns the data.
+	DelegateBackup  bool
+	DelegateRestore bool
+	HelperBinary    string
+
+	// PodmanDirect runs podman commands directly in the caller's user
+	// session (used by the helper) instead of wrapping them via runuser.
+	PodmanDirect bool
+
+	// RestoreContainersReady skips re-rendering and starting instance
+	// containers during restore. The helper sets it because the fleet has
+	// already orchestrated the container lifecycle before delegating.
+	RestoreContainersReady bool
 }
 
 func NewSystemdPodman(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir, rootlessUser string) *SystemdPodmanExecutor {

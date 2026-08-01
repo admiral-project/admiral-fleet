@@ -107,7 +107,13 @@ claimLoop:
 func buildExecutor(cfg *config.Config) executor.Executor {
 	switch cfg.Executor {
 	case "systemd-podman":
-		return executor.NewSystemdPodman(nil, nil, cfg.QuadletDir, cfg.DataDir, cfg.RootlessUser)
+		exec := executor.NewSystemdPodman(nil, nil, cfg.QuadletDir, cfg.DataDir, cfg.RootlessUser)
+		// Data-plane backup/restore runs in admiral-fleet-backup as the
+		// rootless user so artifacts are never chowned between root and the
+		// workload user.
+		exec.DelegateBackup = true
+		exec.DelegateRestore = true
+		return exec
 	default:
 		return executor.NewSimulated()
 	}
