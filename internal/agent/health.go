@@ -192,7 +192,13 @@ func (a *Agent) StartStorageChecker(ctx context.Context) {
 		}
 	}
 
-	time.Sleep(30 * time.Second)
+	startup := time.NewTimer(30 * time.Second)
+	defer startup.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-startup.C:
+	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

@@ -24,7 +24,13 @@ import (
 const FleetVersion = "0.0.1beta19"
 
 func (a *Agent) StartHeartbeatSender(ctx context.Context) {
-	time.Sleep(10 * time.Second)
+	startup := time.NewTimer(10 * time.Second)
+	defer startup.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-startup.C:
+	}
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
