@@ -24,6 +24,19 @@ const (
 	defaultHelperBinary = "admiral-fleet-backup"
 )
 
+// chownForRootless hands a single path to the rootless user without following
+// symlinks. The storage trees handed over by the fleet are writable by the
+// rootless user, so a planted symlink must never be dereferenced by os.Chown
+// (that would let the rootless user redirect root to chown an arbitrary file).
+// Lchown is race-safe against an in-between swap because it never dereferences,
+// so a directory replaced by a symlink can only ever chown the link itself.
+func (e *SystemdPodmanExecutor) chownForRootless(path string, info os.FileInfo, uid, gid int) error {
+	if info != nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	return e.FS.Lchown(path, uid, gid)
+}
+
 // prepareStorageRoots ensures the data-plane directories under DataDir are
 // owned by the rootless user so admiral-fleet-backup can create and remove
 // backup artifacts and restore staging files without root privileges.
@@ -55,7 +68,7 @@ func (e *SystemdPodmanExecutor) prepareStorageRoots() error {
 		if err := e.FS.MkdirAll(root, 0751); err != nil {
 			return fmt.Errorf("create storage root %q: %w", root, err)
 		}
-		if err := e.FS.Chown(root, uid, gid); err != nil {
+		if err := e.FS.Lchown(root, uid, gid); err != nil {
 			return fmt.Errorf("chown storage root %q: %w", root, err)
 		}
 		if err := e.FS.Chmod(root, 0751); err != nil {
@@ -63,14 +76,15 @@ func (e *SystemdPodmanExecutor) prepareStorageRoots() error {
 		}
 		// Hand pre-existing artifacts (created by older root-based fleet
 		// versions) to the rootless user so the helper can write there.
-		if err := e.FS.Walk(root, func(path string, _ os.FileInfo, err error) error {
+		// Symlinks are skipped and never followed.
+		if err := e.FS.Walk(root, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
 			if path == root {
 				return nil
 			}
-			return e.FS.Chown(path, uid, gid)
+			return e.chownForRootless(path, info, uid, gid)
 		}); err != nil {
 			return fmt.Errorf("chown storage tree %q: %w", root, err)
 		}

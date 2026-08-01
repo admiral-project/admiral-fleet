@@ -89,11 +89,11 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 		dataDir = "/var/lib/admiral"
 	}
 	instDir := filepath.Join(dataDir, "instances", instanceID)
-	if err := e.FS.Walk(instDir, func(path string, _ os.FileInfo, err error) error {
+	if err := e.FS.Walk(instDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		return e.FS.Chown(path, uid, gid)
+		return e.chownForRootless(path, info, uid, gid)
 	}); err != nil {
 		return err
 	}
@@ -133,11 +133,11 @@ func (e *SystemdPodmanExecutor) chownRestoreDir(dir string) error {
 	}
 	// Hand the staging dir and its artifacts to the rootless user so podman cp
 	// can read the decompressed dump.
-	if err := e.FS.Walk(dir, func(path string, _ os.FileInfo, err error) error {
+	if err := e.FS.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		return e.FS.Chown(path, uid, gid)
+		return e.chownForRootless(path, info, uid, gid)
 	}); err != nil {
 		return fmt.Errorf("chown restore staging dir %q: %w", dir, err)
 	}

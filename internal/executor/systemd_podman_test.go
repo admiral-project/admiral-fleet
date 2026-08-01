@@ -117,6 +117,7 @@ func (f fakeFS) MkdirAll(path string, perm os.FileMode) error {
 }
 func (f fakeFS) Chmod(_ string, _ os.FileMode) error { return nil }
 func (f fakeFS) Chown(_ string, _, _ int) error      { return nil }
+func (f fakeFS) Lchown(_ string, _, _ int) error     { return nil }
 func (f fakeFS) WriteFile(filename string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
 		return err
