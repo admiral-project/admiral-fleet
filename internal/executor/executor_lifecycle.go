@@ -80,9 +80,28 @@ func (e *SystemdPodmanExecutor) resize(ctx context.Context, task admiral.FleetTa
 		return result
 	}
 
-	// Stop existing units
+	// Stop existing units, but retain the units that actually stopped so a
+	// failed resize can restore service availability.
+	stoppedUnits := make([]string, 0, len(unitNames(task)))
 	for _, unit := range unitNames(task) {
-		_ = e.systemd().Stop(ctx, unit)
+		if err := e.systemd().Stop(ctx, unit); err != nil {
+			for _, stopped := range stoppedUnits {
+				_ = e.systemd().Start(ctx, stopped)
+			}
+			result.Success = false
+			result.Error = fmt.Sprintf("stop unit %q for resize %q: %v", unit, task.InstanceID, err)
+			return result
+		}
+		stoppedUnits = append(stoppedUnits, unit)
+	}
+	restoreOnFailure := func() string {
+		var rollbackError string
+		for _, unit := range stoppedUnits {
+			if err := e.systemd().Start(ctx, unit); err != nil {
+				rollbackError += fmt.Sprintf("; rollback start unit %q: %v", unit, err)
+			}
+		}
+		return rollbackError
 	}
 
 	// Re-render Quadlet with updated tier limits
@@ -90,29 +109,33 @@ func (e *SystemdPodmanExecutor) resize(ctx context.Context, task admiral.FleetTa
 	r := e.renderer()
 	r.HostPorts = ports
 	if err := r.Render(task); err != nil {
+		rollbackError := restoreOnFailure()
 		result.Success = false
-		result.Error = fmt.Sprintf("re-render quadlet for resize %q: %v", task.InstanceID, err)
+		result.Error = fmt.Sprintf("re-render quadlet for resize %q: %v%s", task.InstanceID, err, rollbackError)
 		return result
 	}
 
 	e.writeInstanceTierInfo(e.DataDir, task.InstanceID, task.Tier)
 
 	if err := e.chownInstanceData(task.InstanceID); err != nil {
+		rollbackError := restoreOnFailure()
 		result.Success = false
-		result.Error = fmt.Sprintf("chown instance data on resize for %q: %v", task.InstanceID, err)
+		result.Error = fmt.Sprintf("chown instance data on resize for %q: %v%s", task.InstanceID, err, rollbackError)
 		return result
 	}
 
 	if err := e.systemd().DaemonReload(ctx); err != nil {
+		rollbackError := restoreOnFailure()
 		result.Success = false
-		result.Error = fmt.Sprintf("daemon-reload on resize for %q: %v", task.InstanceID, err)
+		result.Error = fmt.Sprintf("daemon-reload on resize for %q: %v%s", task.InstanceID, err, rollbackError)
 		return result
 	}
 
 	for _, unit := range unitNames(task) {
 		if err := e.systemd().Start(ctx, unit); err != nil {
+			rollbackError := restoreOnFailure()
 			result.Success = false
-			result.Error = fmt.Sprintf("start unit %q after resize: %v", unit, err)
+			result.Error = fmt.Sprintf("start unit %q after resize: %v%s", unit, err, rollbackError)
 			return result
 		}
 	}
