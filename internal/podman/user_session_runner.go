@@ -31,7 +31,10 @@ func (r UserSessionRunner) runWithStdin(ctx context.Context, stdin io.Reader, na
 	if err := security.ValidateExecParams(name, args); err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, "systemctl", userSessionCommandArgs(name, args)...) // #nosec G204 -- name and args are validated by security.ValidateExecParams
+	// systemd-run --user --wait --collect --pipe runs the command as a
+	// transient unit in the caller's user manager while piping stdio, which
+	// keeps podman exec/cp attached to the rootless cgroup hierarchy.
+	cmd := exec.CommandContext(ctx, "systemd-run", userSessionCommandArgs(name, args)...) // #nosec G204 -- name and args are validated by security.ValidateExecParams
 	cmd.Dir = "/tmp"
 	cmd.Stdin = stdin
 	var stderr bytes.Buffer

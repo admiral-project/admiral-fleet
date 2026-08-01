@@ -56,6 +56,9 @@ func main() {
 		os.Exit(1)
 	}
 	if !result.Success {
+		if result.Error != "" {
+			fmt.Fprintln(os.Stderr, result.Error)
+		}
 		os.Exit(1)
 	}
 }

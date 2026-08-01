@@ -81,6 +81,14 @@ func (e *SystemdPodmanExecutor) delegateDataTask(ctx context.Context, task admir
 	}
 	out, err := e.runHelper(ctx, action, payload)
 	if err != nil {
+		// The helper encodes a structured result on stdout before exiting
+		// non-zero; prefer it over the generic spawn error.
+		var helperResult admiral.TaskResult
+		if json.Unmarshal(out, &helperResult) == nil && helperResult.Error != "" {
+			result.Success = false
+			result.Error = helperResult.Error
+			return result
+		}
 		result.Success = false
 		result.Error = fmt.Sprintf("%s helper failed: %v", action, err)
 		return result
