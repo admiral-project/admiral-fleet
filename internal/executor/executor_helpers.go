@@ -171,6 +171,7 @@ func (e *SystemdPodmanExecutor) podman() *podman.Inspector {
 		insp.Runner = podman.UserSessionRunner{}
 	} else if e.RemotePodman {
 		insp.Runner = podman.RemoteRunner{RootlessUser: e.RootlessUser, DataDir: e.DataDir}
+		insp.RootlessUser = e.RootlessUser
 		insp.RemoteRootless = true
 	} else {
 		insp.RootlessUser = e.RootlessUser
