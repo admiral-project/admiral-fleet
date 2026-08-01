@@ -380,8 +380,13 @@ func (a *Agent) StartBackupStorageWarner(ctx context.Context) {
 
 	// Initial check after some delay
 	go func() {
-		time.Sleep(1 * time.Minute)
-		a.warnIfNoBackupStorage()
+		timer := time.NewTimer(1 * time.Minute)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+			a.warnIfNoBackupStorage()
+		}
 	}()
 
 	for {
