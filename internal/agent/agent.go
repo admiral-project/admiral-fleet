@@ -15,10 +15,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/executor"
+	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral/tlsconfig"
 )
@@ -39,6 +41,7 @@ type Agent struct {
 	outbox                *outbox
 	replayMu              sync.Mutex
 	seenTasks             map[string]time.Time
+	podmanRunner          podman.Runner
 }
 
 func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir, taskPublicKeyHex string, exec executor.Executor) (*Agent, error) {
@@ -77,7 +80,18 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 		},
 		outbox:    newOutbox(outboxDir),
 		seenTasks: make(map[string]time.Time),
+		podmanRunner: podman.RemoteRunner{
+			RootlessUser: rootlessUser,
+			DataDir:      envOrDefault("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
+		},
 	}, nil
+}
+
+func envOrDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 // ClaimTask claims the next available task from admirald via HTTP API.

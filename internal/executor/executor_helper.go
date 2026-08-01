@@ -162,6 +162,7 @@ func (e *SystemdPodmanExecutor) helperCommandArgs(rootlessUID, action string) ([
 	return []string{
 		"-u", e.RootlessUser, "--",
 		"env",
+		"HOME=/var/lib/admiral-apps",
 		"XDG_RUNTIME_DIR=" + xdgRuntimeDir,
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(xdgRuntimeDir, "bus"),
 		"ADMIRAL_FLEET_DATA_DIR=" + e.DataDir,

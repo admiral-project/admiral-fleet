@@ -38,6 +38,7 @@ type SystemdPodmanExecutor struct {
 	DelegateBackup  bool
 	DelegateRestore bool
 	HelperBinary    string
+	RemotePodman    bool
 
 	// PodmanDirect runs podman commands directly in the caller's user
 	// session (used by the helper) instead of wrapping them via runuser.

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
@@ -48,7 +49,7 @@ func (a *Agent) sendHeartbeat(ctx context.Context) {
 func (a *Agent) buildHeartbeat(ctx context.Context) admiral.HeartbeatRequest {
 	hostname, _ := os.Hostname()
 	ip := detectLocalIP()
-	podmanV := detectPodmanVersion(ctx)
+	podmanV := a.detectPodmanVersion(ctx)
 	diskTotal, diskUsed := detectDiskUsage(ctx)
 	ramTotal, ramUsed, ramAvail := detectRAMUsage(ctx)
 	podsActive, podsPaused, podsFailed := a.countPodsByStatus(ctx)
@@ -122,13 +123,22 @@ func detectLocalIP() string {
 	return ""
 }
 
-func detectPodmanVersion(ctx context.Context) string {
-	cmd := exec.CommandContext(ctx, "podman", "version", "--format", "{{.Version}}")
-	out, err := cmd.Output()
+func (a *Agent) detectPodmanVersion(ctx context.Context) string {
+	out, err := a.runPodman(ctx, "version", "--format", "{{.Version}}")
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func (a *Agent) runPodman(ctx context.Context, args ...string) ([]byte, error) {
+	if a.podmanRunner == nil {
+		a.podmanRunner = podman.RemoteRunner{
+			RootlessUser: a.RootlessUser,
+			DataDir:      envOrDefault("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
+		}
+	}
+	return a.podmanRunner.Run(ctx, "podman", args...)
 }
 
 func detectDiskUsage(ctx context.Context) (totalBytes, usedBytes int64) {

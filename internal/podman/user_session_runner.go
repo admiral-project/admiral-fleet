@@ -20,16 +20,25 @@ import (
 type UserSessionRunner struct{}
 
 func (r UserSessionRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return r.runWithStdin(ctx, nil, name, args...)
+	return r.runWithStdin(ctx, nil, false, name, args...)
 }
 
 func (r UserSessionRunner) RunWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
-	return r.runWithStdin(ctx, stdin, name, args...)
+	return r.runWithStdin(ctx, stdin, false, name, args...)
 }
 
-func (r UserSessionRunner) runWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
-	if err := security.ValidateExecParams(name, args); err != nil {
-		return nil, err
+func (r UserSessionRunner) RunTrustedWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
+	return r.runWithStdin(ctx, stdin, true, name, args...)
+}
+
+func (r UserSessionRunner) runWithStdin(ctx context.Context, stdin io.Reader, trusted bool, name string, args ...string) ([]byte, error) {
+	if !trusted {
+		if err := security.ValidateExecParams(name, args); err != nil {
+			return nil, err
+		}
+	}
+	if name != "podman" {
+		return nil, fmt.Errorf("user session runner accepts only podman, got %q", name)
 	}
 	// systemd-run --user --wait --collect --pipe runs the command as a
 	// transient unit in the caller's user manager while piping stdio, which

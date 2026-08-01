@@ -13,13 +13,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
@@ -147,8 +145,7 @@ type podInfo struct {
 }
 
 func (a *Agent) listAdmiralPods(ctx context.Context) ([]podInfo, error) {
-	cmd := a.podmanCommand(ctx, "pod", "ps", "--format", "{{.Name}}\t{{.Status}}")
-	out, err := cmd.Output()
+	out, err := a.runPodman(ctx, "pod", "ps", "--format", "{{.Name}}\t{{.Status}}")
 	if err != nil {
 		return nil, fmt.Errorf("list pods: %w", err)
 	}
@@ -171,30 +168,6 @@ func (a *Agent) listAdmiralPods(ctx context.Context) ([]podInfo, error) {
 		pods = append(pods, podInfo{Name: name, Status: status})
 	}
 	return pods, nil
-}
-
-func (a *Agent) podmanCommand(ctx context.Context, args ...string) *exec.Cmd {
-	if err := security.ValidateRunArgs(args); err != nil {
-		return exec.CommandContext(ctx, "false")
-	}
-
-	if a.RootlessUser == "" {
-		cmd := exec.CommandContext(ctx, "podman", args...) // #nosec G204 -- args are validated by security.ValidateRunArgs
-		cmd.Dir = "/tmp"
-		return cmd
-	}
-
-	u, err := user.Lookup(a.RootlessUser)
-	if err != nil {
-		cmd := exec.CommandContext(ctx, "podman", args...) // #nosec G204 -- args are validated by security.ValidateRunArgs
-		cmd.Dir = "/tmp"
-		return cmd
-	}
-	xdgRuntimeDir := "/run/user/" + u.Uid
-	runuserArgs := append([]string{"-u", a.RootlessUser, "--", "env", "XDG_RUNTIME_DIR=" + xdgRuntimeDir, "podman"}, args...)
-	cmd := exec.CommandContext(ctx, "runuser", runuserArgs...) // #nosec G204 -- wrapper args are validated and preserve rootless podman execution semantics
-	cmd.Dir = "/tmp"
-	return cmd
 }
 
 func sanitizeInstanceID(id string) string {
@@ -413,8 +386,7 @@ func parseStorageLimitBytes(value string) int64 {
 }
 
 func (a *Agent) findVolumeMountpoint(ctx context.Context, instanceID string) string {
-	cmd := a.podmanCommand(ctx, "volume", "ls", "--format", "{{.Name}}")
-	out, err := cmd.Output()
+	out, err := a.runPodman(ctx, "volume", "ls", "--format", "{{.Name}}")
 	if err != nil {
 		return ""
 	}
@@ -428,8 +400,7 @@ func (a *Agent) findVolumeMountpoint(ctx context.Context, instanceID string) str
 			continue
 		}
 
-		inspectCmd := a.podmanCommand(ctx, "volume", "inspect", name, "--format", "{{.Mountpoint}}")
-		mpOut, err := inspectCmd.Output()
+		mpOut, err := a.runPodman(ctx, "volume", "inspect", name, "--format", "{{.Mountpoint}}")
 		if err != nil {
 			continue
 		}

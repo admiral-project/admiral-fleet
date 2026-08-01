@@ -161,6 +161,7 @@ func (e *SystemdPodmanExecutor) podman() *podman.Inspector {
 		if !e.PodmanDirect {
 			e.Podman.RootlessUser = e.RootlessUser
 		}
+		e.Podman.RemoteRootless = e.RemotePodman
 		e.Podman.TempDir = filepath.Join(e.DataDir, "tmp")
 		return e.Podman
 	}
@@ -168,6 +169,9 @@ func (e *SystemdPodmanExecutor) podman() *podman.Inspector {
 	insp.TempDir = filepath.Join(e.DataDir, "tmp")
 	if e.PodmanDirect {
 		insp.Runner = podman.UserSessionRunner{}
+	} else if e.RemotePodman {
+		insp.Runner = podman.RemoteRunner{RootlessUser: e.RootlessUser, DataDir: e.DataDir}
+		insp.RemoteRootless = true
 	} else {
 		insp.RootlessUser = e.RootlessUser
 	}

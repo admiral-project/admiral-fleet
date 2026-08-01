@@ -28,6 +28,10 @@ type stdinRunner interface {
 	RunWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error)
 }
 
+type trustedStdinRunner interface {
+	RunTrustedWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error)
+}
+
 type CommandRunner struct{}
 
 func (r CommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -60,10 +64,11 @@ func (r CommandRunner) runWithStdin(ctx context.Context, stdin io.Reader, name s
 }
 
 type Inspector struct {
-	Runner       Runner
-	Timeout      time.Duration
-	RootlessUser string // empty = run as root; set = run via sudo -u
-	TempDir      string // shared with the rootless user manager when PrivateTmp is enabled
+	Runner         Runner
+	Timeout        time.Duration
+	RootlessUser   string // empty = run as root; set = run via sudo -u
+	TempDir        string // shared with the rootless user manager when PrivateTmp is enabled
+	RemoteRootless bool   // delegate every Podman invocation to a rootless helper
 }
 
 func NewInspector(runner Runner) *Inspector {
@@ -395,7 +400,7 @@ func (i *Inspector) runSecretWithStdin(ctx context.Context, stdin io.Reader, arg
 	defer cancel()
 
 	secretArgs := append([]string{"secret"}, args...)
-	if i.RootlessUser != "" {
+	if i.RootlessUser != "" && !i.RemoteRootless {
 		return i.runAsUserSystemdUserSession(runCtx, stdin, secretArgs...)
 	}
 
@@ -446,7 +451,7 @@ func (i *Inspector) runWithStdin(ctx context.Context, stdin io.Reader, args ...s
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if i.RootlessUser != "" {
+	if i.RootlessUser != "" && !i.RemoteRootless {
 		return i.runAsUserWithStdin(runCtx, stdin, args...)
 	}
 
@@ -475,12 +480,15 @@ func (i *Inspector) runTrustedWithStdin(ctx context.Context, stdin io.Reader, ar
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if i.RootlessUser != "" {
+	if i.RootlessUser != "" && !i.RemoteRootless {
 		return i.runAsUserWithStdinTrusted(runCtx, stdin, args...)
 	}
 
 	runner := i.Runner
 	if runner != nil {
+		if trustedRunner, ok := runner.(trustedStdinRunner); ok {
+			return trustedRunner.RunTrustedWithStdin(runCtx, stdin, "podman", args...)
+		}
 		if stdin != nil {
 			if runnerWithStdin, ok := runner.(stdinRunner); ok {
 				return runnerWithStdin.RunWithStdin(runCtx, stdin, "podman", args...)

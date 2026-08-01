@@ -178,6 +178,7 @@ func TestHelperCommandArgs(t *testing.T) {
 	want := []string{
 		"-u", "admiral-apps", "--",
 		"env",
+		"HOME=/var/lib/admiral-apps",
 		"XDG_RUNTIME_DIR=/run/user/991",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/991/bus",
 		"ADMIRAL_FLEET_DATA_DIR=/var/lib/admiral",

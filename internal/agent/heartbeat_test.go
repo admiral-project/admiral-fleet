@@ -12,7 +12,7 @@ func TestDetectLocalIP(t *testing.T) {
 }
 
 func TestDetectPodmanVersion(t *testing.T) {
-	v := detectPodmanVersion(context.Background())
+	v := (&Agent{RootlessUser: "nobody"}).detectPodmanVersion(context.Background())
 	// In sandbox it might fail if podman is not installed, but it should handle it
 	t.Logf("Podman version: %s", v)
 }

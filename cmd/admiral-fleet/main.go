@@ -113,6 +113,7 @@ func buildExecutor(cfg *config.Config) executor.Executor {
 		// workload user.
 		exec.DelegateBackup = true
 		exec.DelegateRestore = true
+		exec.RemotePodman = true
 		return exec
 	default:
 		return executor.NewSimulated()
