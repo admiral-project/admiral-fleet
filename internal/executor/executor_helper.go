@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -59,6 +60,19 @@ func (e *SystemdPodmanExecutor) prepareStorageRoots() error {
 		}
 		if err := e.FS.Chmod(root, 0751); err != nil {
 			return fmt.Errorf("chmod storage root %q: %w", root, err)
+		}
+		// Hand pre-existing artifacts (created by older root-based fleet
+		// versions) to the rootless user so the helper can write there.
+		if err := e.FS.Walk(root, func(path string, _ os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if path == root {
+				return nil
+			}
+			return e.FS.Chown(path, uid, gid)
+		}); err != nil {
+			return fmt.Errorf("chown storage tree %q: %w", root, err)
 		}
 	}
 	return nil

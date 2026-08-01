@@ -15,6 +15,8 @@ type recordingFS struct {
 	mkdirs map[string]os.FileMode
 	chowns map[string][2]int
 	chmods map[string]os.FileMode
+	// tree holds child paths returned by Walk for recursive chown checks.
+	tree []string
 }
 
 func newRecordingFS() *recordingFS {
@@ -46,12 +48,21 @@ func (f *recordingFS) ReadFile(string) ([]byte, error) {
 	return nil, os.ErrInvalid
 }
 func (f *recordingFS) WriteFile(string, []byte, os.FileMode) error { return os.ErrInvalid }
-func (f *recordingFS) Walk(string, filepath.WalkFunc) error {
+func (f *recordingFS) Walk(root string, walkFn filepath.WalkFunc) error {
+	for _, p := range f.tree {
+		if err := walkFn(p, nil, nil); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func TestPrepareStorageRootsChownsToRootlessUser(t *testing.T) {
 	fs := newRecordingFS()
+	fs.tree = []string{
+		"/var/lib/admiral/backups/inst_old/old-mariadb-db.tar.gz",
+		"/var/lib/admiral/restore/artifact.bin",
+	}
 	exec := &SystemdPodmanExecutor{
 		FS:           fs,
 		UserLookup:   fakeUserLookup{},
@@ -74,6 +85,11 @@ func TestPrepareStorageRootsChownsToRootlessUser(t *testing.T) {
 		}
 		if fs.chmods[root] != 0751 {
 			t.Fatalf("unexpected chmod for %q: %v", root, fs.chmods[root])
+		}
+	}
+	for _, artifact := range fs.tree {
+		if fs.chowns[artifact] != [2]int{1000, 1000} {
+			t.Fatalf("expected pre-existing artifact %q to be chowned, got %v", artifact, fs.chowns[artifact])
 		}
 	}
 }
