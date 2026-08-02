@@ -62,7 +62,7 @@ func (e *SystemdPodmanExecutor) inspectSnapshot(ctx context.Context, task admira
 			serviceSnapshot["volume"] = map[string]interface{}{
 				"name":    volName,
 				"source":  svc.Volume,
-				"inspect": mustJSONValue(volumeInspect),
+				"inspect": sanitizedInspectJSONValue(volumeInspect),
 			}
 		}
 		services = append(services, serviceSnapshot)
@@ -74,7 +74,7 @@ func (e *SystemdPodmanExecutor) inspectSnapshot(ctx context.Context, task admira
 		"executor":       "systemd-podman",
 		"instance_id":    task.InstanceID,
 		"containers":     services,
-		"all_containers": mustJSONValue(containers),
+		"all_containers": sanitizedInspectJSONValue(containers),
 		"inspected_at":   time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
