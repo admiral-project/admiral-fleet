@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
@@ -68,7 +69,7 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 	}
 
 	path := filepath.Join(dir, fmt.Sprintf("%s-database-%s.tar.gz", databaseType, task.OperationID))
-	f, err := e.FS.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	f, err := e.FS.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("create backup file: %v", err)

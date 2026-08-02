@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
@@ -93,15 +95,43 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 		if err != nil {
 			return err
 		}
+		rel, relErr := filepath.Rel(instDir, path)
+		if relErr != nil {
+			return fmt.Errorf("calculate instance path %q: %w", path, relErr)
+		}
+		writableData := rel == "data" || strings.HasPrefix(rel, "data"+string(filepath.Separator))
+		// Keep control-file directories root-owned so a rootless workload cannot
+		// replace paths that Fleet later writes as root. Data directories remain
+		// writable by the workload user.
+		if info.IsDir() && !writableData {
+			return nil
+		}
 		return e.chownForRootless(path, info, uid, gid)
 	}); err != nil {
 		return err
 	}
-	// Ensure rootless user can traverse to the instance env files
-	for _, dir := range []string{dataDir, filepath.Join(dataDir, "instances")} {
+	// Ensure rootless user can traverse to the instance env files without
+	// granting it write access to the control-file directories.
+	for _, dir := range []string{dataDir, filepath.Join(dataDir, "instances"), instDir, filepath.Join(instDir, "env")} {
 		if err := e.FS.Chmod(dir, 0751); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("chmod %q for rootless traversal: %w", dir, err)
 		}
+	}
+	return nil
+}
+
+func (e *SystemdPodmanExecutor) writeFileNoFollow(path string, data []byte, perm os.FileMode) error {
+	file, err := e.FS.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, perm)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	n, err := file.Write(data)
+	if err != nil {
+		return err
+	}
+	if n != len(data) {
+		return io.ErrShortWrite
 	}
 	return nil
 }

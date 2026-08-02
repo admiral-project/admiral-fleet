@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
@@ -208,7 +209,7 @@ func (e *SystemdPodmanExecutor) downloadS3Artifact(ctx context.Context, task adm
 		return "", fmt.Errorf("create restore staging dir: %w", err)
 	}
 	path := filepath.Join(dir, "artifact.bin")
-	if err := e.FS.WriteFile(path, data, 0600); err != nil {
+	if err := e.writeFileNoFollow(path, data, 0600); err != nil {
 		return "", fmt.Errorf("write S3 artifact: %w", err)
 	}
 	return path, nil
@@ -367,7 +368,7 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 		return "", fmt.Errorf("create restore staging dir: %w", err)
 	}
 	path := filepath.Join(dir, "artifact.bin")
-	file, err := e.FS.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	file, err := e.FS.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		return "", fmt.Errorf("create restore artifact file: %w", err)
 	}
@@ -420,14 +421,14 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 		return fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
 	}
 
-	data, err := e.FS.ReadFile(artifactPath)
+	volumeArchive, err := e.looksLikeVolumeArchiveFile(artifactPath)
 	if err != nil {
-		return fmt.Errorf("read restore artifact: %w", err)
+		return fmt.Errorf("inspect restore artifact: %w", err)
 	}
-	if looksLikeVolumeArchive(data) {
+	if volumeArchive {
 		return e.restoreVolumes(ctx, task, artifactPath)
 	}
-	rawPath, err := e.expandGzipArtifact(artifactPath, data)
+	rawPath, err := e.expandGzipArtifactFromFile(artifactPath)
 	if err != nil {
 		return err
 	}
@@ -494,18 +495,18 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 		return fmt.Errorf("copy restore artifact into container %q: %w", container, err)
 	}
 
-	dumpData, err := e.FS.ReadFile(rawPath) // #nosec G304 -- rawPath is generated in a controlled restore staging directory
-	if err != nil {
-		return fmt.Errorf("read decompressed dump for restore: %w", err)
-	}
-
 	switch dbEngine {
 	case "mysql", "mariadb":
 		restoreCmd := "mysql"
 		if dbEngine == "mariadb" || strings.Contains(strings.ToLower(svc.Image), "mariadb") {
 			restoreCmd = "mariadb"
 		}
-		if _, err := e.podman().ExecWithStdin(ctx, container, map[string]string{"MYSQL_PWD": password}, bytes.NewReader(dumpData), restoreCmd, "-h", "127.0.0.1", "-u", username, databaseName); err != nil {
+		dumpFile, err := e.FS.Open(rawPath)
+		if err != nil {
+			return fmt.Errorf("open decompressed dump for restore: %w", err)
+		}
+		defer dumpFile.Close()
+		if _, err := e.podman().ExecWithStdin(ctx, container, map[string]string{"MYSQL_PWD": password}, dumpFile, restoreCmd, "-h", "127.0.0.1", "-u", username, databaseName); err != nil {
 			return fmt.Errorf("run %s restore in container %q: %w", restoreCmd, container, err)
 		}
 	default:
@@ -612,8 +613,29 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(data []byte, mountpo
 	return nil
 }
 
-func (e *SystemdPodmanExecutor) expandGzipArtifact(path string, data []byte) (string, error) {
-	reader, err := gzip.NewReader(bytes.NewReader(data))
+func (e *SystemdPodmanExecutor) looksLikeVolumeArchiveFile(path string) (bool, error) {
+	file, err := e.FS.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return false, nil
+	}
+	defer reader.Close()
+	tarReader := tar.NewReader(reader)
+	_, err = tarReader.Next()
+	return err == nil, nil
+}
+
+func (e *SystemdPodmanExecutor) expandGzipArtifactFromFile(path string) (string, error) {
+	input, err := e.FS.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open restore archive %q: %w", path, err)
+	}
+	defer input.Close()
+	reader, err := gzip.NewReader(input)
 	if err != nil {
 		return "", fmt.Errorf("open restore archive %q: %w", path, err)
 	}

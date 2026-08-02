@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
@@ -413,7 +414,12 @@ func defaultVolumeTarget(svc admiral.ServiceInfo) string {
 }
 
 func writeFile(path, content string, perm os.FileMode) error {
-	if err := os.WriteFile(path, []byte(content), perm); err != nil {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, perm) // #nosec G304 -- validated Admiral data paths
+	if err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	defer file.Close()
+	if _, err := file.Write([]byte(content)); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil

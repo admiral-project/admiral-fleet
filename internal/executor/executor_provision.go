@@ -252,7 +252,7 @@ func (e *SystemdPodmanExecutor) writeSetupMarker(instanceID string) {
 	if err := e.FS.MkdirAll(dir, 0700); err != nil {
 		return
 	}
-	_ = e.FS.WriteFile(setupMarkerPath(e.DataDir, instanceID), []byte("done"), 0600)
+	_ = e.writeFileNoFollow(setupMarkerPath(e.DataDir, instanceID), []byte("done"), 0600)
 }
 
 // runSetupCommands executes the setup_command declared on each service
@@ -538,7 +538,7 @@ func (e *SystemdPodmanExecutor) writeInstanceTierInfo(dataDir, instanceID string
 	if err != nil {
 		return
 	}
-	_ = e.FS.WriteFile(filepath.Join(dir, "tier.json"), data, 0600)
+	_ = e.writeFileNoFollow(filepath.Join(dir, "tier.json"), data, 0600)
 }
 
 const minHostPort = 40000
@@ -577,14 +577,14 @@ func (e *SystemdPodmanExecutor) allocateHostPorts(dataDir, instanceID string, se
 		ports[svc.Name] = next
 		next++
 	}
-	if err := e.FS.WriteFile(counterFile, []byte(fmt.Sprintf("%d", next)), 0644); err != nil {
+	if err := e.writeFileNoFollow(counterFile, []byte(fmt.Sprintf("%d", next)), 0644); err != nil {
 		return nil, fmt.Errorf("persist next port: %w", err)
 	}
 	portData, err := json.Marshal(ports)
 	if err != nil {
 		return nil, fmt.Errorf("marshal ports: %w", err)
 	}
-	if err := e.FS.WriteFile(portsFilePath(dataDir, instanceID), portData, 0600); err != nil {
+	if err := e.writeFileNoFollow(portsFilePath(dataDir, instanceID), portData, 0600); err != nil {
 		return nil, fmt.Errorf("write ports file: %w", err)
 	}
 	return ports, nil
