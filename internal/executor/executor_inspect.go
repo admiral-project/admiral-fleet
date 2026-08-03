@@ -217,7 +217,7 @@ func (e *SystemdPodmanExecutor) startImageEvidence(ctx context.Context, task adm
 		if imageID == "" || imageRef == "" {
 			return nil, fmt.Errorf("started service %q did not report image reference and ID", svc.Name)
 		}
-		if !imageReferencesEqual(imageRef, svc.Image) {
+		if !admiral.ImageReferencesEqual(imageRef, svc.Image) {
 			return nil, fmt.Errorf("started service %q uses image %q, expected %q", svc.Name, imageRef, svc.Image)
 		}
 		evidence[svc.Name] = startImageEvidence{
@@ -240,26 +240,4 @@ func isImageIDHex(value string) bool {
 		}
 	}
 	return true
-}
-
-func imageReferencesEqual(actual, expected string) bool {
-	return canonicalImageReference(actual) != "" && canonicalImageReference(actual) == canonicalImageReference(expected)
-}
-
-func canonicalImageReference(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" || strings.Contains(value, "@sha256:") {
-		return value
-	}
-	first := value
-	if slash := strings.IndexByte(value, '/'); slash >= 0 {
-		first = value[:slash]
-	}
-	if !strings.Contains(first, ".") && !strings.Contains(first, ":") && first != "localhost" {
-		if strings.Contains(value, "/") {
-			return "docker.io/" + value
-		}
-		return "docker.io/library/" + value
-	}
-	return value
 }
