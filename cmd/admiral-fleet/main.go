@@ -41,6 +41,7 @@ func main() {
 	go fleetAgent.StartStorageChecker(ctx)
 	go fleetAgent.StartOutboxFlusher(ctx, 30*time.Second)
 	go fleetAgent.StartBackupStorageWarner(ctx)
+	go fleetAgent.StartImagePuller(ctx)
 
 	// Reconcile before consuming commands so the control plane has the
 	// current local instance view after worker restart.

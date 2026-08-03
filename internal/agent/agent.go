@@ -33,6 +33,7 @@ type Agent struct {
 	FleetToken            string
 	StorageCheckInterval  string
 	StorageExceededAction string
+	ImagePullInterval     string
 	RootlessUser          string
 	QuadletDir            string
 	taskPublicKey         ed25519.PublicKey
@@ -68,6 +69,7 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 		FleetToken:            fleetToken,
 		StorageCheckInterval:  storageCheckInterval,
 		StorageExceededAction: storageExceededAction,
+		ImagePullInterval:     envOrDefault("ADMIRAL_FLEET_IMAGE_PULL_INTERVAL", "1h"),
 		RootlessUser:          rootlessUser,
 		QuadletDir:            quadletDir,
 		taskPublicKey:         taskPublicKey,
