@@ -149,7 +149,7 @@ func (f fakeFS) Walk(root string, walkFn filepath.WalkFunc) error {
 type fakeUserLookup struct{}
 
 func (f fakeUserLookup) Lookup(_ string) (*user.User, error) {
-	return &user.User{Uid: "1000", Gid: "1000"}, nil
+	return &user.User{Uid: "1000", Gid: "1000", HomeDir: "/var/lib/admiral-apps"}, nil
 }
 
 func testRootlessUser(t *testing.T) string {

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -158,7 +157,7 @@ func (e *SystemdPodmanExecutor) helperCommandArgs(rootlessUID, action string) ([
 	if strings.TrimSpace(action) == "" {
 		return nil, fmt.Errorf("helper action is required")
 	}
-	rootlessUser, err := user.Lookup(e.RootlessUser)
+	rootlessUser, err := e.UserLookup.Lookup(e.RootlessUser)
 	if err != nil {
 		return nil, fmt.Errorf("lookup rootless user %q: %w", e.RootlessUser, err)
 	}
