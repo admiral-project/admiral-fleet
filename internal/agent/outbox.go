@@ -19,6 +19,11 @@ type outbox struct {
 	dir string
 }
 
+const (
+	maxOutboxItems = 10000
+	maxOutboxBytes = 1 << 30
+)
+
 func newOutbox(dir string) *outbox {
 	if dir == "" {
 		dir = "/var/lib/admiral/outbox"
@@ -38,6 +43,24 @@ func (o *outbox) enqueue(result admiral.TaskResult) error {
 	body, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshal task result: %w", err)
+	}
+	entries, err := os.ReadDir(o.dir)
+	if err != nil {
+		return fmt.Errorf("inspect outbox: %w", err)
+	}
+	var totalBytes int64
+	items := 0
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		items++
+		if info, statErr := entry.Info(); statErr == nil {
+			totalBytes += info.Size()
+		}
+	}
+	if items >= maxOutboxItems || totalBytes+int64(len(body)) > maxOutboxBytes {
+		return fmt.Errorf("fleet callback outbox limit reached (%d items, %d bytes)", items, totalBytes)
 	}
 	if err := os.WriteFile(path, body, 0600); err != nil {
 		return fmt.Errorf("write outbox item: %w", err)

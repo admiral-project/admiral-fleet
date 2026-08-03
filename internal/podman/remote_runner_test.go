@@ -14,6 +14,7 @@ func TestRemoteRunnerSelectsSpecializedHelper(t *testing.T) {
 	}{
 		{name: "inspect", args: []string{"container", "inspect", "admiral-demo"}, want: "/lifecycle"},
 		{name: "remove", args: []string{"rm", "--force", "admiral-demo"}, want: "/lifecycle"},
+		{name: "pull", args: []string{"pull", "registry.example/app:latest"}, want: "/lifecycle"},
 		{name: "exec", args: []string{"exec", "admiral-demo", "true"}, want: "/setup"},
 		{name: "trusted run", args: []string{"run", "--rm", "image", "sh", "-c", "echo ok"}, want: "/setup"},
 	}
@@ -31,7 +32,7 @@ func TestRemoteRunnerSelectsSpecializedHelper(t *testing.T) {
 }
 
 func TestRemoteRunnerRejectsUnsupportedOperation(t *testing.T) {
-	_, err := (RemoteRunner{}).helperFor([]string{"pull", "image"})
+	_, err := (RemoteRunner{}).helperFor([]string{"build", "image"})
 	if err == nil {
 		t.Fatal("expected unsupported operation error")
 	}

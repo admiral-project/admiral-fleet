@@ -48,7 +48,11 @@ func Serve(ctx context.Context, allowed, trusted map[string]bool) error {
 	var out []byte
 	var runErr error
 	runner := podman.UserSessionRunner{}
-	out, runErr = runner.RunWithStdin(ctx, stream, request.Name, request.Args...)
+	if trusted[strings.TrimSpace(request.Args[0])] {
+		out, runErr = runner.RunTrustedWithStdin(ctx, stream, request.Name, request.Args...)
+	} else {
+		out, runErr = runner.RunWithStdin(ctx, stream, request.Name, request.Args...)
+	}
 	response := rootlessprotocol.Response{Version: rootlessprotocol.Version, Stdout: out}
 	if runErr != nil {
 		response.Error = runErr.Error()
