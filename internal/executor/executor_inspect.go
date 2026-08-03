@@ -183,6 +183,13 @@ type containerImageInspect struct {
 func (e *SystemdPodmanExecutor) startImageEvidence(ctx context.Context, task admiral.FleetTask) (map[string]startImageEvidence, error) {
 	evidence := make(map[string]startImageEvidence, len(task.Services))
 	for _, svc := range task.Services {
+		// Services with a setup_command are transient helpers. They are
+		// removed after provisioning and therefore have no container to
+		// inspect during a later start. Only verify containers that start
+		// as part of the running instance.
+		if strings.TrimSpace(svc.SetupCommand) != "" {
+			continue
+		}
 		containerName := containerName(task.InstanceID, svc.Name)
 		data, err := e.podman().ContainerInspect(ctx, containerName)
 		if err != nil {
