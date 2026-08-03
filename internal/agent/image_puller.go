@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -51,7 +52,8 @@ func (a *Agent) pullOCIImages(ctx context.Context) {
 }
 
 func (a *Agent) fetchOCIImages(ctx context.Context) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.APIURL+"/api/v1/fleet/oci_images", nil)
+	endpoint := a.APIURL + "/api/v1/fleet/oci_images?node_id=" + url.QueryEscape(a.NodeID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create OCI image request: %w", err)
 	}
