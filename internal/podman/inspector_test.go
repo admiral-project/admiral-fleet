@@ -266,6 +266,16 @@ func TestInspectorExtractTarRejectsRelativeMountpoint(t *testing.T) {
 	}
 }
 
+func TestIDMapEntryHostToContainer(t *testing.T) {
+	entry := IDMapEntry{ContainerStart: 1, HostStart: 655360, Count: 131072}
+	if got, ok := entry.HostToContainer(655392); !ok || got != 33 {
+		t.Fatalf("mapped host ID = %d, %v; want 33, true", got, ok)
+	}
+	if _, ok := entry.HostToContainer(655359); ok {
+		t.Fatal("expected host ID below mapping to be rejected")
+	}
+}
+
 func TestInspectorContainerMethods(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)

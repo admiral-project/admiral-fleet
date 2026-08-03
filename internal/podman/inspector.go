@@ -71,6 +71,22 @@ type Inspector struct {
 	RemoteRootless bool   // delegate every Podman invocation to a rootless helper
 }
 
+// IDMapEntry describes one user-namespace mapping line. Container IDs map to
+// host IDs; restore uses the inverse mapping for TAR headers created outside
+// the namespace.
+type IDMapEntry struct {
+	ContainerStart uint64
+	HostStart      uint64
+	Count          uint64
+}
+
+func (entry IDMapEntry) HostToContainer(id uint64) (uint64, bool) {
+	if id < entry.HostStart || id-entry.HostStart >= entry.Count {
+		return 0, false
+	}
+	return entry.ContainerStart + (id - entry.HostStart), true
+}
+
 func NewInspector(runner Runner) *Inspector {
 	return &Inspector{Runner: runner, Timeout: 30 * time.Second}
 }
@@ -133,6 +149,41 @@ func (i *Inspector) ExtractTar(ctx context.Context, archive io.Reader, mountpoin
 		return fmt.Errorf("extract archive in rootless user namespace: %w", err)
 	}
 	return nil
+}
+
+// UserNamespaceIDMap returns the effective rootless user namespace mappings.
+func (i *Inspector) UserNamespaceIDMap(ctx context.Context) ([]IDMapEntry, error) {
+	return i.userNamespaceMap(ctx, "uid_map")
+}
+
+// UserNamespaceGIDMap returns the effective rootless group namespace mappings.
+func (i *Inspector) UserNamespaceGIDMap(ctx context.Context) ([]IDMapEntry, error) {
+	return i.userNamespaceMap(ctx, "gid_map")
+}
+
+func (i *Inspector) userNamespaceMap(ctx context.Context, name string) ([]IDMapEntry, error) {
+	out, err := i.runTrustedWithStdin(ctx, nil, "unshare", "cat", "/proc/self/"+name)
+	if err != nil {
+		return nil, fmt.Errorf("read rootless %s: %w", name, err)
+	}
+	var entries []IDMapEntry
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		containerStart, err1 := strconv.ParseUint(fields[0], 10, 64)
+		hostStart, err2 := strconv.ParseUint(fields[1], 10, 64)
+		count, err3 := strconv.ParseUint(fields[2], 10, 64)
+		if err1 != nil || err2 != nil || err3 != nil || count == 0 {
+			return nil, fmt.Errorf("invalid rootless user namespace map line %q", line)
+		}
+		entries = append(entries, IDMapEntry{ContainerStart: containerStart, HostStart: hostStart, Count: count})
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("rootless %s is empty", name)
+	}
+	return entries, nil
 }
 
 func (i *Inspector) Exec(ctx context.Context, container string, args ...string) ([]byte, error) {

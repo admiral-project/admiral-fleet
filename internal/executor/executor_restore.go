@@ -575,6 +575,14 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(ctx context.Context,
 	tarReader := tar.NewReader(reader)
 	var filtered bytes.Buffer
 	tarWriter := tar.NewWriter(&filtered)
+	idMap, err := e.podman().UserNamespaceIDMap(ctx)
+	if err != nil {
+		return err
+	}
+	gidMap, err := e.podman().UserNamespaceGIDMap(ctx)
+	if err != nil {
+		return err
+	}
 	for {
 		head, err := tarReader.Next()
 		if errors.Is(err, io.EOF) {
@@ -597,6 +605,27 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(ctx context.Context,
 		if head.Typeflag == tar.TypeReg && head.Size > maxRestoreFileBytes {
 			return fmt.Errorf("restore file %q exceeds maximum size of %d bytes", rel, maxRestoreFileBytes)
 		}
+		var mapped bool
+		var mappedID uint64
+		for _, entry := range idMap {
+			if mappedID, mapped = entry.HostToContainer(uint64(head.Uid)); mapped {
+				break
+			}
+		}
+		if !mapped {
+			return fmt.Errorf("restore file %q has unmapped uid %d", rel, head.Uid)
+		}
+		head.Uid = int(mappedID)
+		mapped = false
+		for _, entry := range gidMap {
+			if mappedID, mapped = entry.HostToContainer(uint64(head.Gid)); mapped {
+				break
+			}
+		}
+		if !mapped {
+			return fmt.Errorf("restore file %q has unmapped gid %d", rel, head.Gid)
+		}
+		head.Gid = int(mappedID)
 		head.Name = filepath.ToSlash(rel)
 		if err := tarWriter.WriteHeader(head); err != nil {
 			return fmt.Errorf("write filtered restore entry %q: %w", rel, err)
