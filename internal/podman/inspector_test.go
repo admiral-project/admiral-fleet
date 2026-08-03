@@ -238,6 +238,34 @@ func TestInspectorVolumeMethods(t *testing.T) {
 	}
 }
 
+func TestInspectorExtractTarUsesRootlessNamespace(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	if err := inspector.ExtractTar(context.Background(), strings.NewReader("archive"), "/var/lib/containers/storage/volumes/demo/_data"); err != nil {
+		t.Fatalf("extract tar: %v", err)
+	}
+
+	expected := []call{{name: "podman", args: []string{
+		"unshare", "tar", "--extract", "--file=-", "--directory",
+		"/var/lib/containers/storage/volumes/demo/_data", "--same-owner", "--no-same-permissions",
+	}}}
+	if !reflect.DeepEqual(runner.calls, expected) {
+		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+	if !reflect.DeepEqual(runner.stdin, []string{"archive"}) {
+		t.Fatalf("unexpected stdin: %#v", runner.stdin)
+	}
+}
+
+func TestInspectorExtractTarRejectsRelativeMountpoint(t *testing.T) {
+	inspector := NewInspector(&fakeRunner{})
+	if err := inspector.ExtractTar(context.Background(), strings.NewReader("archive"), "relative/path"); err == nil {
+		t.Fatal("expected relative mountpoint to be rejected")
+	}
+}
+
 func TestInspectorContainerMethods(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)

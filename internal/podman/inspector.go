@@ -120,6 +120,21 @@ func (i *Inspector) VolumeInspect(ctx context.Context, volume string) ([]byte, e
 	return i.run(ctx, "volume", "inspect", volume, "--format", "json")
 }
 
+// ExtractTar restores an archive inside Podman's rootless user namespace.
+// Volume files may be owned by subordinate IDs that are not writable by the
+// host-side rootless user. Running tar through podman unshare lets the kernel
+// apply those mapped IDs while keeping the operation rootless.
+func (i *Inspector) ExtractTar(ctx context.Context, archive io.Reader, mountpoint string) error {
+	if strings.TrimSpace(mountpoint) == "" || !filepath.IsAbs(mountpoint) {
+		return fmt.Errorf("invalid volume mountpoint %q", mountpoint)
+	}
+	_, err := i.runTrustedWithStdin(ctx, archive, "unshare", "tar", "--extract", "--file=-", "--directory", mountpoint, "--same-owner", "--no-same-permissions")
+	if err != nil {
+		return fmt.Errorf("extract archive in rootless user namespace: %w", err)
+	}
+	return nil
+}
+
 func (i *Inspector) Exec(ctx context.Context, container string, args ...string) ([]byte, error) {
 	return i.ExecWithEnv(ctx, container, nil, args...)
 }
