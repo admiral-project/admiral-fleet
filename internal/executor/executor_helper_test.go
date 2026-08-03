@@ -168,6 +168,7 @@ func TestPrepareStorageRootsSkipsWithoutRootlessUser(t *testing.T) {
 
 func TestHelperCommandArgs(t *testing.T) {
 	exec := &SystemdPodmanExecutor{
+		UserLookup:   fakeUserLookup{},
 		RootlessUser: "admiral-apps",
 		DataDir:      "/var/lib/admiral",
 	}
