@@ -71,7 +71,7 @@ func (r RemoteRunner) runWithStdin(ctx context.Context, stdin io.Reader, trusted
 	if err != nil {
 		return nil, fmt.Errorf("marshal rootless Podman request: %w", err)
 	}
-	uid, err := lookupUserID(r.RootlessUser)
+	rootlessUser, err := lookupUser(r.RootlessUser)
 	if err != nil {
 		return nil, err
 	}
@@ -81,9 +81,9 @@ func (r RemoteRunner) runWithStdin(ctx context.Context, stdin io.Reader, trusted
 	}
 	argsForRunuser := []string{
 		"-u", r.RootlessUser, "--", "env",
-		"HOME=/var/lib/admiral-apps",
-		"XDG_RUNTIME_DIR=" + filepath.Join("/run/user", uid),
-		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join("/run/user", uid, "bus"),
+		"HOME=" + rootlessUser.HomeDir,
+		"XDG_RUNTIME_DIR=" + filepath.Join("/run/user", rootlessUser.Uid),
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join("/run/user", rootlessUser.Uid, "bus"),
 		"ADMIRAL_FLEET_DATA_DIR=" + dataDir,
 		helper,
 	}
@@ -130,13 +130,16 @@ func (r RemoteRunner) helperFor(args []string) (string, error) {
 	return helper, nil
 }
 
-func lookupUserID(username string) (string, error) {
+func lookupUser(username string) (*user.User, error) {
 	if strings.TrimSpace(username) == "" {
-		return "", fmt.Errorf("rootless user is required")
+		return nil, fmt.Errorf("rootless user is required")
 	}
 	u, err := user.Lookup(username)
 	if err != nil {
-		return "", fmt.Errorf("lookup rootless user %q: %w", username, err)
+		return nil, fmt.Errorf("lookup rootless user %q: %w", username, err)
 	}
-	return u.Uid, nil
+	if strings.TrimSpace(u.HomeDir) == "" {
+		return nil, fmt.Errorf("rootless user %q has no home directory", username)
+	}
+	return u, nil
 }

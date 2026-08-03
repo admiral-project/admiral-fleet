@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -157,12 +158,19 @@ func (e *SystemdPodmanExecutor) helperCommandArgs(rootlessUID, action string) ([
 	if strings.TrimSpace(action) == "" {
 		return nil, fmt.Errorf("helper action is required")
 	}
+	rootlessUser, err := user.Lookup(e.RootlessUser)
+	if err != nil {
+		return nil, fmt.Errorf("lookup rootless user %q: %w", e.RootlessUser, err)
+	}
+	if strings.TrimSpace(rootlessUser.HomeDir) == "" {
+		return nil, fmt.Errorf("rootless user %q has no home directory", e.RootlessUser)
+	}
 	xdgRuntimeDir := filepath.Join("/run/user", rootlessUID)
 	binary := e.helperBinaryPath()
 	return []string{
 		"-u", e.RootlessUser, "--",
 		"env",
-		"HOME=/var/lib/admiral-apps",
+		"HOME=" + rootlessUser.HomeDir,
 		"XDG_RUNTIME_DIR=" + xdgRuntimeDir,
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(xdgRuntimeDir, "bus"),
 		"ADMIRAL_FLEET_DATA_DIR=" + e.DataDir,
