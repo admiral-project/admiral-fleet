@@ -207,6 +207,9 @@ func (e *SystemdPodmanExecutor) startImageEvidence(ctx context.Context, task adm
 		if imageID == "" {
 			imageID = strings.TrimSpace(record.ID)
 		}
+		if isImageIDHex(imageID) {
+			imageID = "sha256:" + imageID
+		}
 		imageRef := strings.TrimSpace(record.ImageName)
 		if imageRef == "" {
 			imageRef = strings.TrimSpace(record.Config.Image)
@@ -225,4 +228,16 @@ func (e *SystemdPodmanExecutor) startImageEvidence(ctx context.Context, task adm
 		}
 	}
 	return evidence, nil
+}
+
+func isImageIDHex(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
