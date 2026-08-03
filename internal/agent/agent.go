@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -114,6 +116,9 @@ func (a *Agent) ClaimTaskContext(ctx context.Context) (*admiral.FleetTask, strin
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
+	mac := hmac.New(sha256.New, []byte(a.FleetToken))
+	_, _ = mac.Write(body)
+	req.Header.Set("X-Admiral-Task-Signature", hex.EncodeToString(mac.Sum(nil)))
 
 	resp, err := a.http.Do(req)
 	if err != nil {
