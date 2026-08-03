@@ -145,6 +145,77 @@ func (e *SystemdPodmanExecutor) startMetadata(ctx context.Context, task admiral.
 			}
 		}
 	}
-	hostPortsJSON, _ := json.Marshal(hostPorts)
-	return fmt.Sprintf(`{"executor":"systemd-podman","action":"start_app","host_ports":%s}`, string(hostPortsJSON)), nil
+	metadata := map[string]interface{}{
+		"executor":   "systemd-podman",
+		"action":     "start_app",
+		"host_ports": hostPorts,
+	}
+	if task.VerifyImages {
+		images, err := e.startImageEvidence(ctx, task)
+		if err != nil {
+			return "", err
+		}
+		metadata["images"] = images
+	}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		return "", fmt.Errorf("marshal start metadata: %w", err)
+	}
+	return string(data), nil
+}
+
+type startImageEvidence struct {
+	DefinedImage string `json:"defined_image"`
+	ImageRef     string `json:"image_ref"`
+	ImageID      string `json:"image_id"`
+	ContainerID  string `json:"container_id"`
+}
+
+type containerImageInspect struct {
+	ID        string `json:"Id"`
+	ImageID   string `json:"Image"`
+	ImageName string `json:"ImageName"`
+	Config    struct {
+		Image string `json:"Image"`
+	} `json:"Config"`
+}
+
+func (e *SystemdPodmanExecutor) startImageEvidence(ctx context.Context, task admiral.FleetTask) (map[string]startImageEvidence, error) {
+	evidence := make(map[string]startImageEvidence, len(task.Services))
+	for _, svc := range task.Services {
+		containerName := containerName(task.InstanceID, svc.Name)
+		data, err := e.podman().ContainerInspect(ctx, containerName)
+		if err != nil {
+			return nil, fmt.Errorf("inspect started container %q for image verification: %w", containerName, err)
+		}
+		var records []containerImageInspect
+		if err := json.Unmarshal(data, &records); err != nil {
+			return nil, fmt.Errorf("parse image inspection for service %q: %w", svc.Name, err)
+		}
+		if len(records) == 0 {
+			return nil, fmt.Errorf("image inspection for service %q returned no container", svc.Name)
+		}
+		record := records[0]
+		imageID := strings.TrimSpace(record.ImageID)
+		if imageID == "" {
+			imageID = strings.TrimSpace(record.ID)
+		}
+		imageRef := strings.TrimSpace(record.ImageName)
+		if imageRef == "" {
+			imageRef = strings.TrimSpace(record.Config.Image)
+		}
+		if imageID == "" || imageRef == "" {
+			return nil, fmt.Errorf("started service %q did not report image reference and ID", svc.Name)
+		}
+		if imageRef != strings.TrimSpace(svc.Image) {
+			return nil, fmt.Errorf("started service %q uses image %q, expected %q", svc.Name, imageRef, svc.Image)
+		}
+		evidence[svc.Name] = startImageEvidence{
+			DefinedImage: svc.Image,
+			ImageRef:     imageRef,
+			ImageID:      imageID,
+			ContainerID:  strings.TrimSpace(record.ID),
+		}
+	}
+	return evidence, nil
 }
