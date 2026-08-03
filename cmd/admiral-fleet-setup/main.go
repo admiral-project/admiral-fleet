@@ -15,6 +15,8 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := helper.Serve(context.Background(), map[string]bool{
 		"exec": true, "cp": true, "run": true, "login": true, "secret": true,
+	}, map[string]bool{
+		"exec": true, "run": true,
 	}); err != nil {
 		slog.Error("rootless setup helper failed", "error", err)
 		os.Exit(1)

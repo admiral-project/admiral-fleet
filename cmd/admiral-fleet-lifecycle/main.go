@@ -16,7 +16,7 @@ func main() {
 	if err := helper.Serve(context.Background(), map[string]bool{
 		"version": true, "port": true, "pod": true, "ps": true, "container": true,
 		"volume": true, "rm": true, "pull": true,
-	}); err != nil {
+	}, nil); err != nil {
 		slog.Error("rootless lifecycle helper failed", "error", err)
 		os.Exit(1)
 	}

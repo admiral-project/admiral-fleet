@@ -5,14 +5,12 @@
 // Fleet and its rootless Podman helpers.
 package rootlessprotocol
 
-const Version = 1
+const Version = 2
 
 type Request struct {
 	Version int      `json:"version"`
 	Name    string   `json:"name"`
 	Args    []string `json:"args"`
-	Stdin   []byte   `json:"stdin,omitempty"`
-	Trusted bool     `json:"trusted,omitempty"`
 }
 
 type Response struct {

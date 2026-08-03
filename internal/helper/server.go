@@ -4,7 +4,7 @@
 package helper
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -21,16 +21,14 @@ const maxRequestBytes = 1 << 30
 
 // Serve handles one rootless Podman request. The executable using it must be
 // launched as the workload user and must expose no network listener.
-func Serve(ctx context.Context, allowed map[string]bool) error {
-	payload, err := io.ReadAll(io.LimitReader(os.Stdin, maxRequestBytes+1))
+func Serve(ctx context.Context, allowed, trusted map[string]bool) error {
+	stream := bufio.NewReader(io.LimitReader(os.Stdin, maxRequestBytes+1))
+	header, err := stream.ReadBytes('\n')
 	if err != nil {
-		return fmt.Errorf("read helper request: %w", err)
-	}
-	if int64(len(payload)) > maxRequestBytes {
-		return fmt.Errorf("helper request exceeds %d bytes", maxRequestBytes)
+		return fmt.Errorf("read helper request header: %w", err)
 	}
 	var request rootlessprotocol.Request
-	if err := json.Unmarshal(payload, &request); err != nil {
+	if err := json.Unmarshal(header, &request); err != nil {
 		return fmt.Errorf("parse helper request: %w", err)
 	}
 	if request.Version != rootlessprotocol.Version {
@@ -42,7 +40,7 @@ func Serve(ctx context.Context, allowed map[string]bool) error {
 	if len(request.Args) == 0 || !allowed[strings.TrimSpace(request.Args[0])] {
 		return fmt.Errorf("operation %q is not allowed for this helper", firstArg(request.Args))
 	}
-	if !request.Trusted {
+	if !trusted[strings.TrimSpace(request.Args[0])] {
 		if err := security.ValidateExecParams(request.Name, request.Args); err != nil {
 			return err
 		}
@@ -50,11 +48,7 @@ func Serve(ctx context.Context, allowed map[string]bool) error {
 	var out []byte
 	var runErr error
 	runner := podman.UserSessionRunner{}
-	if request.Trusted {
-		out, runErr = runner.RunTrustedWithStdin(ctx, bytes.NewReader(request.Stdin), request.Name, request.Args...)
-	} else {
-		out, runErr = runner.RunWithStdin(ctx, bytes.NewReader(request.Stdin), request.Name, request.Args...)
-	}
+	out, runErr = runner.RunWithStdin(ctx, stream, request.Name, request.Args...)
 	response := rootlessprotocol.Response{Version: rootlessprotocol.Version, Stdout: out}
 	if runErr != nil {
 		response.Error = runErr.Error()

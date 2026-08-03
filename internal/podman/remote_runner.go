@@ -40,13 +40,13 @@ func (r RemoteRunner) RunWithStdin(ctx context.Context, stdin io.Reader, name st
 	return r.runWithStdin(ctx, stdin, false, name, args...)
 }
 
-// RunTrustedWithStdin is used only for validated setup commands whose shell
-// syntax is part of the app definition contract.
+// RunTrustedWithStdin is retained for the runner interface. Trust policy is
+// selected by the specialized helper, never serialized by the caller.
 func (r RemoteRunner) RunTrustedWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
 	return r.runWithStdin(ctx, stdin, true, name, args...)
 }
 
-func (r RemoteRunner) runWithStdin(ctx context.Context, stdin io.Reader, trusted bool, name string, args ...string) ([]byte, error) {
+func (r RemoteRunner) runWithStdin(ctx context.Context, stdin io.Reader, _ bool, name string, args ...string) ([]byte, error) {
 	if name != "podman" {
 		return nil, fmt.Errorf("rootless helper accepts only podman, got %q", name)
 	}
@@ -54,23 +54,15 @@ func (r RemoteRunner) runWithStdin(ctx context.Context, stdin io.Reader, trusted
 	if err != nil {
 		return nil, err
 	}
-	var input []byte
-	if stdin != nil {
-		input, err = io.ReadAll(stdin)
-		if err != nil {
-			return nil, fmt.Errorf("read Podman stdin: %w", err)
-		}
-	}
-	payload, err := json.Marshal(rootlessprotocol.Request{
+	header, err := json.Marshal(rootlessprotocol.Request{
 		Version: rootlessprotocol.Version,
 		Name:    name,
 		Args:    args,
-		Stdin:   input,
-		Trusted: trusted,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal rootless Podman request: %w", err)
 	}
+	header = append(header, '\n')
 	rootlessUser, err := lookupUser(r.RootlessUser)
 	if err != nil {
 		return nil, err
@@ -87,7 +79,11 @@ func (r RemoteRunner) runWithStdin(ctx context.Context, stdin io.Reader, trusted
 		"ADMIRAL_FLEET_DATA_DIR=" + dataDir,
 		helper,
 	}
-	out, runErr := (CommandRunner{}).RunWithStdin(ctx, bytes.NewReader(payload), "runuser", argsForRunuser...)
+	requestStream := io.Reader(bytes.NewReader(header))
+	if stdin != nil {
+		requestStream = io.MultiReader(requestStream, stdin)
+	}
+	out, runErr := (CommandRunner{}).RunWithStdin(ctx, requestStream, "runuser", argsForRunuser...)
 	if runErr != nil {
 		var response rootlessprotocol.Response
 		if json.Unmarshal(out, &response) == nil && response.Error != "" {
