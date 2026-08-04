@@ -88,9 +88,11 @@ claimLoop:
 		}
 
 		stopRenew := fleetAgent.StartLeaseRenewer(commandID)
-		if err := fleetAgent.HandleTaskContext(ctx, *task); err != nil {
+		taskCtx, taskCancel := context.WithTimeout(ctx, taskTimeout(task.Action))
+		if err := fleetAgent.HandleTaskContext(taskCtx, *task); err != nil {
 			slog.Error("failed to send callback", "task_id", task.TaskID, "error", err)
 		}
+		taskCancel()
 		stopRenew()
 	}
 	if httpServer != nil {
@@ -102,6 +104,17 @@ claimLoop:
 	}
 	if err := fleetAgent.FlushOutbox(); err != nil {
 		slog.Warn("fleet outbox flush during shutdown failed", "error", err)
+	}
+}
+
+func taskTimeout(action string) time.Duration {
+	switch action {
+	case "restore":
+		return 30 * time.Minute
+	case "provision", "resize":
+		return 15 * time.Minute
+	default:
+		return 10 * time.Minute
 	}
 }
 
