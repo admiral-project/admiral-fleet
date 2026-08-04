@@ -518,11 +518,6 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 }
 
 func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral.FleetTask, artifactPath string) error {
-	data, err := e.FS.ReadFile(artifactPath)
-	if err != nil {
-		return fmt.Errorf("read restore artifact: %w", err)
-	}
-
 	targetServices := e.servicesWithVolumes(task)
 	volumeTargets := e.volumeTargets(task)
 	if len(volumeTargets) == 0 {
@@ -550,7 +545,7 @@ func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral
 			return fmt.Errorf("volume %q has no mountpoint", volName)
 		}
 		prefix := target.archivePrefix + "/"
-		if err := e.extractGzipTarToDirFiltered(ctx, data, mountpoint, prefix); err != nil {
+		if err := e.extractGzipTarToDirFiltered(ctx, artifactPath, mountpoint, prefix); err != nil {
 			return fmt.Errorf("restore volume %q: %w", volName, err)
 		}
 	}
@@ -566,21 +561,33 @@ func (e *SystemdPodmanExecutor) restoreVolumes(ctx context.Context, task admiral
 	return nil
 }
 
-func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(ctx context.Context, data []byte, mountpoint, prefix string) error {
-	reader, err := gzip.NewReader(bytes.NewReader(data))
+func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(ctx context.Context, artifactPath, mountpoint, prefix string) error {
+	archiveFile, err := e.FS.Open(artifactPath)
+	if err != nil {
+		return fmt.Errorf("open restore volume archive: %w", err)
+	}
+	defer archiveFile.Close()
+	reader, err := gzip.NewReader(archiveFile)
 	if err != nil {
 		return fmt.Errorf("open restore volume archive: %w", err)
 	}
 	defer reader.Close()
 	tarReader := tar.NewReader(reader)
-	var filtered bytes.Buffer
-	tarWriter := tar.NewWriter(&filtered)
+	filteredPath := artifactPath + ".filtered"
+	filteredFile, err := e.FS.Create(filteredPath)
+	if err != nil {
+		return fmt.Errorf("create filtered restore archive: %w", err)
+	}
+	defer e.FS.Remove(filteredPath)
+	tarWriter := tar.NewWriter(filteredFile)
 	idMap, err := e.podman().UserNamespaceIDMap(ctx)
 	if err != nil {
+		_ = filteredFile.Close()
 		return err
 	}
 	gidMap, err := e.podman().UserNamespaceGIDMap(ctx)
 	if err != nil {
+		_ = filteredFile.Close()
 		return err
 	}
 	for {
@@ -589,6 +596,8 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(ctx context.Context,
 			break
 		}
 		if err != nil {
+			_ = tarWriter.Close()
+			_ = filteredFile.Close()
 			return fmt.Errorf("read restore volume archive: %w", err)
 		}
 		if !strings.HasPrefix(head.Name, prefix) {
@@ -597,12 +606,18 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(ctx context.Context,
 		rel := strings.TrimPrefix(head.Name, prefix)
 		rel = filepath.Clean(rel)
 		if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+			_ = tarWriter.Close()
+			_ = filteredFile.Close()
 			return fmt.Errorf("refuse to restore path outside mountpoint: %s", rel)
 		}
 		if head.Typeflag != tar.TypeDir && head.Typeflag != tar.TypeReg {
+			_ = tarWriter.Close()
+			_ = filteredFile.Close()
 			return fmt.Errorf("unsupported restore entry type %d for %q", head.Typeflag, rel)
 		}
 		if head.Typeflag == tar.TypeReg && head.Size > maxRestoreFileBytes {
+			_ = tarWriter.Close()
+			_ = filteredFile.Close()
 			return fmt.Errorf("restore file %q exceeds maximum size of %d bytes", rel, maxRestoreFileBytes)
 		}
 		var mapped bool
@@ -613,6 +628,8 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(ctx context.Context,
 			}
 		}
 		if !mapped {
+			_ = tarWriter.Close()
+			_ = filteredFile.Close()
 			return fmt.Errorf("restore file %q has unmapped uid %d", rel, head.Uid)
 		}
 		head.Uid = int(mappedID)
@@ -623,23 +640,37 @@ func (e *SystemdPodmanExecutor) extractGzipTarToDirFiltered(ctx context.Context,
 			}
 		}
 		if !mapped {
+			_ = tarWriter.Close()
+			_ = filteredFile.Close()
 			return fmt.Errorf("restore file %q has unmapped gid %d", rel, head.Gid)
 		}
 		head.Gid = int(mappedID)
 		head.Name = filepath.ToSlash(rel)
 		if err := tarWriter.WriteHeader(head); err != nil {
+			_ = filteredFile.Close()
 			return fmt.Errorf("write filtered restore entry %q: %w", rel, err)
 		}
 		if head.Typeflag == tar.TypeReg {
 			if _, err := io.CopyN(tarWriter, tarReader, head.Size); err != nil {
+				_ = tarWriter.Close()
+				_ = filteredFile.Close()
 				return fmt.Errorf("copy restore file %q: %w", rel, err)
 			}
 		}
 	}
 	if err := tarWriter.Close(); err != nil {
+		_ = filteredFile.Close()
 		return fmt.Errorf("finalize filtered restore archive: %w", err)
 	}
-	if err := e.podman().ExtractTar(ctx, bytes.NewReader(filtered.Bytes()), mountpoint); err != nil {
+	if err := filteredFile.Close(); err != nil {
+		return fmt.Errorf("close filtered restore archive: %w", err)
+	}
+	filteredInput, err := e.FS.Open(filteredPath)
+	if err != nil {
+		return fmt.Errorf("open filtered restore archive: %w", err)
+	}
+	defer filteredInput.Close()
+	if err := e.podman().ExtractTar(ctx, filteredInput, mountpoint); err != nil {
 		return fmt.Errorf("extract filtered restore archive: %w", err)
 	}
 	return nil
