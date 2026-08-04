@@ -90,7 +90,11 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 	slog.Info("provision: systemd daemon reloaded", "instance", task.InstanceID)
 	for _, svc := range task.Services {
 		if svc.Registry != nil {
-			if err := quadlet.ValidateRegistryHost(svc.Registry.Server, e.Renderer.AllowedRegistries); err != nil {
+			var allowed map[string]struct{}
+			if e.Renderer != nil {
+				allowed = e.Renderer.AllowedRegistries
+			}
+			if err := quadlet.ValidateRegistryHost(svc.Registry.Server, allowed); err != nil {
 				result.Success = false
 				result.Error = fmt.Sprintf("service %q registry policy: %v", svc.Name, err)
 				return result
