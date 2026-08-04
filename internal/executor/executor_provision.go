@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
@@ -89,6 +90,11 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 	slog.Info("provision: systemd daemon reloaded", "instance", task.InstanceID)
 	for _, svc := range task.Services {
 		if svc.Registry != nil {
+			if err := quadlet.ValidateRegistryHost(svc.Registry.Server, e.Renderer.AllowedRegistries); err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("service %q registry policy: %v", svc.Name, err)
+				return result
+			}
 			loginCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			if err := e.podman().Login(loginCtx, svc.Registry.Server, svc.Registry.Username, svc.Registry.Password); err != nil {
 				cancel()

@@ -12,6 +12,38 @@ import (
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
+func TestValidateImageReferencePolicy(t *testing.T) {
+	allowed := map[string]struct{}{"docker.io": {}, "quay.io": {}}
+
+	tests := []struct {
+		name    string
+		image   string
+		mutable bool
+		wantErr string
+	}{
+		{name: "reject untrusted registry", image: "attacker.example/x:y", wantErr: "not in ADMIRAL_FLEET_ALLOWED_REGISTRIES"},
+		{name: "reject latest", image: "docker.io/library/nginx:latest", wantErr: "mutable image reference"},
+		{name: "accept pinned tag", image: "docker.io/library/nginx:1.27.4"},
+		{name: "accept digest", image: "quay.io/example/app@sha256:0123456789abcdef", wantErr: ""},
+		{name: "allow mutable override", image: "docker.io/library/nginx:latest", mutable: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateImageReference(tc.image, allowed, tc.mutable)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	quadletDir := t.TempDir()
 	dataDir := t.TempDir()

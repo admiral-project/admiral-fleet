@@ -20,10 +20,12 @@ import (
 var sensitiveEnvPattern = regexp.MustCompile(`(?i)(SECRET|PASSWORD|TOKEN|KEY|CREDENTIAL)`)
 
 type Renderer struct {
-	QuadletDir     string
-	DataDir        string
-	HostPorts      map[string]int // service name -> allocated host port
-	PublishAddress string
+	QuadletDir        string
+	DataDir           string
+	HostPorts         map[string]int // service name -> allocated host port
+	PublishAddress    string
+	AllowedRegistries map[string]struct{}
+	AllowMutableRefs  bool
 }
 
 // wantedBy returns the systemd target for Quadlet [Install] sections.
@@ -38,9 +40,11 @@ func NewRenderer(quadletDir, dataDir string) *Renderer {
 		publishAddress = "127.0.0.1"
 	}
 	return &Renderer{
-		QuadletDir:     defaultString(quadletDir, "/etc/containers/systemd"),
-		DataDir:        defaultString(dataDir, "/var/lib/admiral"),
-		PublishAddress: publishAddress,
+		QuadletDir:        defaultString(quadletDir, "/etc/containers/systemd"),
+		DataDir:           defaultString(dataDir, "/var/lib/admiral"),
+		PublishAddress:    publishAddress,
+		AllowedRegistries: loadAllowedRegistries(),
+		AllowMutableRefs:  os.Getenv("ADMIRAL_FLEET_ALLOW_MUTABLE_REFS") == "1",
 	}
 }
 
@@ -77,6 +81,9 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 	}
 
 	for _, svc := range SortedServices(task.Services) {
+		if err := ValidateImageReference(svc.Image, r.AllowedRegistries, r.AllowMutableRefs); err != nil {
+			return fmt.Errorf("service %q image policy: %w", svc.Name, err)
+		}
 		if svc.Volume != "" {
 			if err := writeFile(filepath.Join(r.QuadletDir, VolumeFileName(task.InstanceID, svc.Name)), renderVolume(task.InstanceID, svc.Name, r.wantedBy()), 0644); err != nil {
 				return err
@@ -92,6 +99,66 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 		}
 		if err := writeFile(filepath.Join(r.QuadletDir, ContainerFileName(task.InstanceID, svc.Name)), r.renderContainer(task.InstanceID, svc, envPath), 0644); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func loadAllowedRegistries() map[string]struct{} {
+	value, ok := os.LookupEnv("ADMIRAL_FLEET_ALLOWED_REGISTRIES")
+	if !ok || strings.TrimSpace(value) == "" {
+		return nil
+	}
+	allowed := make(map[string]struct{})
+	for _, item := range strings.Split(value, ",") {
+		if host := strings.ToLower(strings.TrimSpace(item)); host != "" {
+			allowed[host] = struct{}{}
+		}
+	}
+	return allowed
+}
+
+// ValidateImageReference applies the node-local defense-in-depth policy.
+func ValidateImageReference(image string, allowed map[string]struct{}, allowMutable bool) error {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return fmt.Errorf("image reference is empty")
+	}
+	if !allowMutable && !strings.Contains(image, "@sha256:") {
+		lastSlash := strings.LastIndex(image, "/")
+		lastColon := strings.LastIndex(image, ":")
+		if lastColon <= lastSlash {
+			return fmt.Errorf("mutable image reference %q must include an immutable tag or digest", image)
+		}
+		if strings.EqualFold(image[lastColon+1:], "latest") {
+			return fmt.Errorf("mutable image reference %q uses the latest tag", image)
+		}
+	}
+	host := image
+	if slash := strings.IndexByte(image, '/'); slash >= 0 {
+		host = image[:slash]
+	} else {
+		host = "docker.io"
+	}
+	if !strings.Contains(host, ".") && !strings.Contains(host, ":") && host != "localhost" {
+		host = "docker.io"
+	}
+	if len(allowed) > 0 {
+		if _, ok := allowed[strings.ToLower(host)]; !ok {
+			return fmt.Errorf("registry %q is not in ADMIRAL_FLEET_ALLOWED_REGISTRIES", host)
+		}
+	}
+	return nil
+}
+
+func ValidateRegistryHost(host string, allowed map[string]struct{}) error {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" || strings.Contains(host, "/") || strings.Contains(host, "://") {
+		return fmt.Errorf("registry host %q is invalid", host)
+	}
+	if len(allowed) > 0 {
+		if _, ok := allowed[host]; !ok {
+			return fmt.Errorf("registry %q is not in ADMIRAL_FLEET_ALLOWED_REGISTRIES", host)
 		}
 	}
 	return nil
