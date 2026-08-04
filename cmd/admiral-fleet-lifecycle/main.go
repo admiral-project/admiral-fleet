@@ -15,8 +15,8 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := helper.Serve(context.Background(), map[string]bool{
 		"version": true, "port": true, "pod": true, "ps": true, "container": true,
-		"volume": true, "rm": true, "pull": true,
-	}, nil); err != nil {
+		"volume": true, "rm": true, "pull": true, "unshare": true,
+	}, map[string]bool{"unshare": true}); err != nil {
 		slog.Error("rootless lifecycle helper failed", "error", err)
 		os.Exit(1)
 	}

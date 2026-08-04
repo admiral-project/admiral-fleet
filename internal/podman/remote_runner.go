@@ -115,7 +115,7 @@ func (r RemoteRunner) helperFor(args []string) (string, error) {
 		if strings.TrimSpace(helper) == "" {
 			helper = DefaultSetupHelper
 		}
-	case "version", "port", "pod", "ps", "container", "volume", "rm", "pull":
+	case "version", "port", "pod", "ps", "container", "volume", "rm", "pull", "unshare":
 		helper = r.Lifecycle
 		if strings.TrimSpace(helper) == "" {
 			helper = DefaultLifecycleHelper
