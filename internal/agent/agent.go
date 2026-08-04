@@ -223,6 +223,13 @@ func (a *Agent) ReportRunning(commandID string) error {
 		return fmt.Errorf("create running request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
+	if a.CallbackKey != "" {
+		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+		mac := hmac.New(sha256.New, []byte(a.CallbackKey))
+		_, _ = mac.Write([]byte(timestamp))
+		req.Header.Set("X-Admiral-Task-Timestamp", timestamp)
+		req.Header.Set("X-Admiral-Task-Signature", hex.EncodeToString(mac.Sum(nil)))
+	}
 
 	resp, err := a.http.Do(req)
 	if err != nil {
@@ -242,6 +249,13 @@ func (a *Agent) RenewLease(commandID string) error {
 		return fmt.Errorf("create renew-lease request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
+	if a.CallbackKey != "" {
+		timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+		mac := hmac.New(sha256.New, []byte(a.CallbackKey))
+		_, _ = mac.Write([]byte(timestamp))
+		req.Header.Set("X-Admiral-Task-Timestamp", timestamp)
+		req.Header.Set("X-Admiral-Task-Signature", hex.EncodeToString(mac.Sum(nil)))
+	}
 
 	resp, err := a.http.Do(req)
 	if err != nil {
