@@ -33,6 +33,7 @@ type Agent struct {
 	NodeID                string
 	APIURL                string
 	FleetToken            string
+	CallbackKey           string
 	StorageCheckInterval  string
 	StorageExceededAction string
 	ImagePullInterval     string
@@ -47,7 +48,7 @@ type Agent struct {
 	podmanRunner          podman.Runner
 }
 
-func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir, taskPublicKeyHex string, exec executor.Executor) (*Agent, error) {
+func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir, taskPublicKeyHex string, exec executor.Executor, callbackKeys ...string) (*Agent, error) {
 	if err := tlsconfig.ValidateURLScheme(apiURL, "https"); err != nil {
 		return nil, err
 	}
@@ -65,10 +66,15 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 		taskPublicKey = ed25519.PublicKey(keyBytes)
 	}
 
+	callbackKey := fleetToken
+	if len(callbackKeys) > 0 && strings.TrimSpace(callbackKeys[0]) != "" {
+		callbackKey = callbackKeys[0]
+	}
 	return &Agent{
 		NodeID:                nodeID,
 		APIURL:                apiURL,
 		FleetToken:            fleetToken,
+		CallbackKey:           callbackKey,
 		StorageCheckInterval:  storageCheckInterval,
 		StorageExceededAction: storageExceededAction,
 		ImagePullInterval:     envOrDefault("ADMIRAL_FLEET_IMAGE_PULL_INTERVAL", "1h"),
@@ -116,7 +122,7 @@ func (a *Agent) ClaimTaskContext(ctx context.Context) (*admiral.FleetTask, strin
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
-	mac := hmac.New(sha256.New, []byte(a.FleetToken))
+	mac := hmac.New(sha256.New, []byte(a.CallbackKey))
 	_, _ = mac.Write(body)
 	req.Header.Set("X-Admiral-Task-Signature", hex.EncodeToString(mac.Sum(nil)))
 	resp, err := a.http.Do(req)
@@ -427,7 +433,7 @@ func (a *Agent) send(result admiral.TaskResult) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
-	mac := hmac.New(sha256.New, []byte(a.FleetToken))
+	mac := hmac.New(sha256.New, []byte(a.CallbackKey))
 	_, _ = mac.Write(body)
 	req.Header.Set("X-Admiral-Task-Signature", hex.EncodeToString(mac.Sum(nil)))
 

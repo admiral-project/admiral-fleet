@@ -28,6 +28,7 @@ type Config struct {
 	StorageExceededAction string
 	RootlessUser          string // required: Admiral only supports rootless workloads
 	TaskPublicKey         string // hex-encoded ed25519 public key for task signature verification
+	CallbackKey           string // separate HMAC key for callback authenticity
 }
 
 func Load() (*Config, error) {
@@ -47,6 +48,7 @@ func Load() (*Config, error) {
 		StorageExceededAction: getEnv("ADMIRAL_FLEET_STORAGE_EXCEEDED_ACTION", "report_only"),
 		RootlessUser:          os.Getenv("ADMIRAL_FLEET_ROOTLESS_USER"),
 		TaskPublicKey:         os.Getenv("ADMIRAL_TASK_PUBLIC_KEY"),
+		CallbackKey:           os.Getenv("ADMIRAL_FLEET_CALLBACK_KEY"),
 	}
 
 	if cfg.RootlessUser != "" {
@@ -59,13 +61,13 @@ func Load() (*Config, error) {
 		}
 	}
 
-	if cfg.NodeID == "" {
+	if isRequiredPlaceholder(cfg.NodeID) {
 		return nil, fmt.Errorf("ADMIRAL_FLEET_NODE_ID is required")
 	}
-	if cfg.FleetToken == "" {
+	if isRequiredPlaceholder(cfg.FleetToken) {
 		return nil, fmt.Errorf("ADMIRAL_FLEET_TOKEN is required")
 	}
-	if cfg.RootlessUser == "" {
+	if isRequiredPlaceholder(cfg.RootlessUser) {
 		return nil, fmt.Errorf("ADMIRAL_FLEET_ROOTLESS_USER is required: Admiral only supports rootless workloads")
 	}
 	if err := tlsconfig.ValidateURLScheme(cfg.APIURL, "https"); err != nil {
@@ -77,6 +79,10 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid ADMIRAL_FLEET_EXECUTOR %q", cfg.Executor)
 	}
 	return cfg, nil
+}
+
+func isRequiredPlaceholder(value string) bool {
+	return value == "" || value == "__REQUIRED__"
 }
 
 func getEnv(key, fallback string) string {

@@ -28,7 +28,7 @@ func main() {
 	exec := buildExecutor(cfg)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
-	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.FleetToken, cfg.APICACertFile, cfg.CallbackOutbox, cfg.StorageCheckInterval, cfg.StorageExceededAction, cfg.RootlessUser, cfg.QuadletDir, cfg.TaskPublicKey, exec)
+	fleetAgent, err := agent.New(cfg.NodeID, cfg.APIURL, cfg.FleetToken, cfg.APICACertFile, cfg.CallbackOutbox, cfg.StorageCheckInterval, cfg.StorageExceededAction, cfg.RootlessUser, cfg.QuadletDir, cfg.TaskPublicKey, exec, cfg.CallbackKey)
 	if err != nil {
 		slog.Error("agent configuration error", "error", err)
 		os.Exit(1)
