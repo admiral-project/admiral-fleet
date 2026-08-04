@@ -40,6 +40,7 @@ admiral-fleet
 | `ADMIRAL_FLEET_EXECUTOR` | Task executor implementation (`systemd-podman`, `simulated`) | No | `simulated` |
 | `ADMIRAL_FLEET_QUADLET_DIR` | Directory for generated Quadlet files | No | `/etc/containers/systemd/admiral` |
 | `ADMIRAL_FLEET_DATA_DIR` | Directory for local data and volumes | No | `/var/lib/admiral` |
+| `ADMIRAL_FLEET_ALLOWED_REGISTRIES` | Optional comma-separated registry allowlist; enforced only when present and non-empty | No | unset (disabled) |
 | `ADMIRAL_FLEET_HTTP_ADDR` | Listen address for internal HTTP server | No | `127.0.0.1:9099` |
 | `ADMIRAL_FLEET_PUBLIC_HOST` | Public hostname or IP of this node | No | - |
 | `ADMIRAL_FLEET_PUBLIC_PORT` | Public port for reaching this node | No | - |

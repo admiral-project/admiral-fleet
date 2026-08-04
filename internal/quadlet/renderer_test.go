@@ -44,6 +44,19 @@ func TestValidateImageReferencePolicy(t *testing.T) {
 	}
 }
 
+func TestValidateImageReferenceSkipsOptionalRegistryAllowlist(t *testing.T) {
+	for name, allowed := range map[string]map[string]struct{}{
+		"unset": nil,
+		"empty": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateImageReference("attacker.example/app:1.0", allowed, false); err != nil {
+				t.Fatalf("optional registry policy must be skipped: %v", err)
+			}
+		})
+	}
+}
+
 func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	quadletDir := t.TempDir()
 	dataDir := t.TempDir()
