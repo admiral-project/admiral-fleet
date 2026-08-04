@@ -88,7 +88,7 @@ claimLoop:
 		}
 
 		stopRenew := fleetAgent.StartLeaseRenewer(commandID)
-		taskCtx, taskCancel := context.WithTimeout(ctx, taskTimeout(task.Action))
+		taskCtx, taskCancel := context.WithTimeout(ctx, taskTimeout(string(task.Action)))
 		if err := fleetAgent.HandleTaskContext(taskCtx, *task); err != nil {
 			slog.Error("failed to send callback", "task_id", task.TaskID, "error", err)
 		}
