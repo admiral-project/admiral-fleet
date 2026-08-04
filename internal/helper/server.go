@@ -22,10 +22,14 @@ const maxRequestBytes = 1 << 30
 // Serve handles one rootless Podman request. The executable using it must be
 // launched as the workload user and must expose no network listener.
 func Serve(ctx context.Context, allowed, trusted map[string]bool) error {
-	stream := bufio.NewReader(io.LimitReader(os.Stdin, maxRequestBytes+1))
+	limitedReader := io.LimitReader(os.Stdin, maxRequestBytes+1)
+	stream := bufio.NewReader(limitedReader)
 	header, err := stream.ReadBytes('\n')
 	if err != nil {
 		return fmt.Errorf("read helper request header: %w", err)
+	}
+	if int64(len(header)) >= maxRequestBytes {
+		return fmt.Errorf("helper request exceeds maximum size of %d bytes", maxRequestBytes)
 	}
 	var request rootlessprotocol.Request
 	if err := json.Unmarshal(header, &request); err != nil {
