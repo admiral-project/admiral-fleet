@@ -119,7 +119,6 @@ func (a *Agent) ClaimTaskContext(ctx context.Context) (*admiral.FleetTask, strin
 	mac := hmac.New(sha256.New, []byte(a.FleetToken))
 	_, _ = mac.Write(body)
 	req.Header.Set("X-Admiral-Task-Signature", hex.EncodeToString(mac.Sum(nil)))
-
 	resp, err := a.http.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("claim task: %w", err)
@@ -351,7 +350,6 @@ func (a *Agent) postStorage(report admiral.StorageReport) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
-
 	resp, err := a.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("send storage report: %w", err)
@@ -429,6 +427,9 @@ func (a *Agent) send(result admiral.TaskResult) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
+	mac := hmac.New(sha256.New, []byte(a.FleetToken))
+	_, _ = mac.Write(body)
+	req.Header.Set("X-Admiral-Task-Signature", hex.EncodeToString(mac.Sum(nil)))
 
 	resp, err := a.http.Do(req)
 	if err != nil {
