@@ -6,9 +6,12 @@ package agent
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -93,10 +96,14 @@ func TestStartOutboxFlusherExitsOnCancel(t *testing.T) {
 }
 
 func TestSendCallback(t *testing.T) {
-	var gotMethod, gotPath string
+	var gotMethod, gotPath, gotTimestamp, gotSignature string
+	var gotBody []byte
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotPath = r.URL.Path
+		gotTimestamp = r.Header.Get("X-Admiral-Task-Timestamp")
+		gotSignature = r.Header.Get("X-Admiral-Task-Signature")
+		gotBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -121,6 +128,15 @@ func TestSendCallback(t *testing.T) {
 	}
 	if gotPath != "/api/v1/fleet/callback" {
 		t.Fatalf("expected /api/v1/fleet/callback, got %s", gotPath)
+	}
+	if gotTimestamp == "" {
+		t.Fatal("expected callback timestamp")
+	}
+	mac := hmac.New(sha256.New, []byte(ag.CallbackKey))
+	_, _ = mac.Write([]byte(gotTimestamp + "."))
+	_, _ = mac.Write(gotBody)
+	if gotSignature != hex.EncodeToString(mac.Sum(nil)) {
+		t.Fatalf("callback signature does not cover timestamp and body")
 	}
 }
 

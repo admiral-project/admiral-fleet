@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -433,8 +434,12 @@ func (a *Agent) send(result admiral.TaskResult) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.FleetToken)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	mac := hmac.New(sha256.New, []byte(a.CallbackKey))
+	_, _ = mac.Write([]byte(timestamp))
+	_, _ = mac.Write([]byte("."))
 	_, _ = mac.Write(body)
+	req.Header.Set("X-Admiral-Task-Timestamp", timestamp)
 	req.Header.Set("X-Admiral-Task-Signature", hex.EncodeToString(mac.Sum(nil)))
 
 	resp, err := a.http.Do(req)
