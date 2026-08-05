@@ -29,6 +29,20 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 		result.Error = fmt.Sprintf("create podman secrets on start for %q: %v", task.InstanceID, err)
 		return result
 	}
+	// An application-definition update changes the rendered image reference.
+	// Stop the existing units before daemon-reload so systemd does not treat
+	// Start below as a no-op and leave the old containers running.  The
+	// controller requests image evidence for this path and will reject a
+	// callback that still reports the previous image.
+	if task.VerifyImages {
+		for _, unit := range unitNames(task) {
+			if err := e.systemd().Stop(ctx, unit); err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("stop unit %q before image update: %v", unit, err)
+				return result
+			}
+		}
+	}
 	if err := e.systemd().DaemonReload(ctx); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("reload systemd on start for instance %q: %v", task.InstanceID, err)
