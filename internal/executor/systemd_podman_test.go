@@ -238,6 +238,48 @@ func TestSystemdPodmanExecutorStartsPodUnitWithLimits(t *testing.T) {
 	}
 }
 
+func TestSystemdPodmanExecutorPullsImagesAsPartOfImageVerification(t *testing.T) {
+	podmanRunner := &fakePodmanRunner{}
+	systemdRunner := &fakeSystemdRunner{}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+
+	res := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:       "task_pull_1",
+		OperationID:  "op_pull_1",
+		NodeID:       "node_1",
+		Action:       admiral.ActionStartApp,
+		InstanceID:   "demo-pull",
+		VerifyImages: true,
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "docker.io/library/wordpress:6.8.1", SetupCommand: "true"},
+		},
+	}, "node_1")
+
+	if !res.Success {
+		t.Fatalf("expected image verification start to succeed, got %q", res.Error)
+	}
+	var pulled bool
+	for _, call := range podmanRunner.calls {
+		if strings.Contains(strings.Join(call, " "), "podman pull docker.io/library/wordpress:6.8.1") {
+			pulled = true
+			break
+		}
+	}
+	if !pulled {
+		t.Fatalf("expected rootless pull call, got %#v", podmanRunner.calls)
+	}
+	var stop, reload, start bool
+	for _, call := range systemdRunner.calls {
+		joined := strings.Join(call, " ")
+		stop = stop || strings.Contains(joined, " stop admiral-demo-pull-pod.service")
+		reload = reload || strings.Contains(joined, " daemon-reload")
+		start = start || strings.Contains(joined, " start admiral-demo-pull-pod.service")
+	}
+	if !stop || !reload || !start {
+		t.Fatalf("expected stop, reload, and start during image verification, got %#v", systemdRunner.calls)
+	}
+}
+
 func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 	runner := &fakeSystemdRunner{err: errors.New("unit not found")}
 	manager := systemd.NewManager(runner)

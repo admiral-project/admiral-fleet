@@ -127,6 +127,20 @@ func (i *Inspector) ContainerInspect(ctx context.Context, container string) ([]b
 	return i.run(ctx, "container", "inspect", container, "--format", "json")
 }
 
+// Pull downloads an image through the configured Podman runner. When the
+// runner is RemoteRootless, the lifecycle helper executes this operation as
+// the configured rootless workload user.
+func (i *Inspector) Pull(ctx context.Context, image string) error {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return fmt.Errorf("image reference is required")
+	}
+	if _, err := i.run(ctx, "pull", image); err != nil {
+		return fmt.Errorf("pull image %q: %w", image, err)
+	}
+	return nil
+}
+
 func (i *Inspector) ContainerExists(ctx context.Context, container string) error {
 	_, err := i.run(ctx, "container", "exists", container)
 	return err

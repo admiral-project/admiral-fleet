@@ -29,6 +29,21 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 		result.Error = fmt.Sprintf("create podman secrets on start for %q: %v", task.InstanceID, err)
 		return result
 	}
+	if task.VerifyImages {
+		seenImages := make(map[string]struct{}, len(task.Services))
+		for _, svc := range task.Services {
+			image := svc.Image
+			if _, seen := seenImages[image]; seen {
+				continue
+			}
+			seenImages[image] = struct{}{}
+			if err := e.podman().Pull(ctx, image); err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("pull image for instance %q: %v", task.InstanceID, err)
+				return result
+			}
+		}
+	}
 	// An application-definition update changes the rendered image reference.
 	// Stop the existing units before daemon-reload so systemd does not treat
 	// Start below as a no-op and leave the old containers running.  The
