@@ -44,8 +44,9 @@ type fakeOverride struct {
 }
 
 type fakePodmanRunner struct {
-	calls     [][]string
-	overrides map[string]fakeOverride
+	calls           [][]string
+	overrides       map[string]fakeOverride
+	inspectFailures int
 }
 
 func (r *fakePodmanRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -70,6 +71,10 @@ func (r *fakePodmanRunner) Run(_ context.Context, name string, args ...string) (
 		}
 	}
 	joined := strings.Join(call, " ")
+	if r.inspectFailures > 0 && strings.Contains(joined, "podman container inspect") {
+		r.inspectFailures--
+		return nil, errors.New("exit status 125: Error: no such container")
+	}
 	for _, o := range r.overrides {
 		if o.contains != "" && strings.Contains(joined, o.contains) {
 			return o.output, o.err
@@ -818,6 +823,24 @@ func TestSystemdPodmanExecutorResumeUsesSystemdStart(t *testing.T) {
 	}
 	if foundPodmanUnpause {
 		t.Fatal("resume must NOT call podman pod unpause")
+	}
+}
+
+func TestSystemdPodmanExecutorRetriesContainerMaterialization(t *testing.T) {
+	podmanRunner := &fakePodmanRunner{inspectFailures: 1, overrides: map[string]fakeOverride{}}
+	podmanRunner.overrides["inspect"] = fakeOverride{
+		contains: "podman container inspect admiral-demo001-app --format json",
+		output:   []byte(`[ {"Id":"abc","Image":"sha256:image","ImageName":"example.com/app:1","Config":{"Image":"example.com/app:1"}} ]`),
+	}
+	systemdRunner := &fakeSystemdRunner{}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+
+	_, err := exec.startImageEvidence(context.Background(), admiral.FleetTask{
+		InstanceID: "demo001",
+		Services:   []admiral.ServiceInfo{{Name: "app", Image: "example.com/app:1"}},
+	})
+	if err != nil {
+		t.Fatalf("expected image evidence after materialization retry, got %v", err)
 	}
 }
 

@@ -191,7 +191,7 @@ func (e *SystemdPodmanExecutor) startImageEvidence(ctx context.Context, task adm
 			continue
 		}
 		containerName := containerName(task.InstanceID, svc.Name)
-		data, err := e.podman().ContainerInspect(ctx, containerName)
+		data, err := e.inspectStartedContainer(ctx, containerName)
 		if err != nil {
 			return nil, fmt.Errorf("inspect started container %q for image verification: %w", containerName, err)
 		}
@@ -228,6 +228,32 @@ func (e *SystemdPodmanExecutor) startImageEvidence(ctx context.Context, task adm
 		}
 	}
 	return evidence, nil
+}
+
+// inspectStartedContainer waits briefly for systemd/Podman to materialize a
+// newly started rootless container. systemd start may return after the unit
+// is queued but before conmon has created the named container. Only the
+// transient "no such container" result is retried; other errors remain
+// actionable immediately.
+func (e *SystemdPodmanExecutor) inspectStartedContainer(ctx context.Context, name string) ([]byte, error) {
+	const retryInterval = 100 * time.Millisecond
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		data, err := e.podman().ContainerInspect(ctx, name)
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "no such container") {
+			return data, err
+		}
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func isImageIDHex(value string) bool {
