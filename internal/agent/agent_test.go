@@ -375,8 +375,8 @@ func TestStartHTTPServerInvalidAddr(t *testing.T) {
 }
 
 func TestFleetVersion(t *testing.T) {
-	if FleetVersion != "0.0.1beta21" {
-		t.Fatalf("expected FleetVersion %q, got %q", "0.0.1beta21", FleetVersion)
+	if FleetVersion != "0.0.1rc1" {
+		t.Fatalf("expected FleetVersion %q, got %q", "0.0.1rc1", FleetVersion)
 	}
 }
 
