@@ -193,7 +193,15 @@ func TestNewRequestVirtualHosted(t *testing.T) {
 func TestPutObject(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody []byte
-	server := newTestS3Server(t, &gotMethod, &gotPath, &gotBody)
+	var gotSSE, gotAuthorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotSSE = r.Header.Get("x-amz-server-side-encryption")
+		gotAuthorization = r.Header.Get("Authorization")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
 	defer server.Close()
 
 	c := NewS3Client(server.URL, "us-east-1", "testbucket", "", "AKID", "secret", true)
@@ -208,6 +216,12 @@ func TestPutObject(t *testing.T) {
 	}
 	if string(gotBody) != "test data" {
 		t.Fatalf("body: got %q, want %q", string(gotBody), "test data")
+	}
+	if gotSSE != "AES256" {
+		t.Fatalf("SSE header: got %q, want AES256", gotSSE)
+	}
+	if !strings.Contains(gotAuthorization, "x-amz-server-side-encryption") {
+		t.Fatalf("authorization does not sign SSE header: %q", gotAuthorization)
 	}
 }
 

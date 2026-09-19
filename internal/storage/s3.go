@@ -69,6 +69,9 @@ func (c *S3Client) PutObject(ctx context.Context, key string, data []byte) error
 		return err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+	// Require encryption at rest even when the bucket does not have a default
+	// encryption policy. It must be set before signing so SigV4 covers it.
+	req.Header.Set("x-amz-server-side-encryption", "AES256")
 	req.ContentLength = int64(len(data))
 	c.signV4(req, key, "s3", sha256Hex(data))
 	resp, err := c.httpClient.Do(req)
