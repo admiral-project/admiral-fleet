@@ -191,12 +191,11 @@ func TestNewRequestVirtualHosted(t *testing.T) {
 }
 
 func TestPutObject(t *testing.T) {
-	var gotMethod, gotPath string
+	var gotMethod string
 	var gotBody []byte
 	var gotSSE, gotAuthorization string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
-		gotPath = r.URL.Path
 		gotSSE = r.Header.Get("x-amz-server-side-encryption")
 		gotAuthorization = r.Header.Get("Authorization")
 		gotBody, _ = io.ReadAll(r.Body)
