@@ -609,5 +609,11 @@ func (e *SystemdPodmanExecutor) loadHostPorts(dataDir, instanceID string) map[st
 	if err := json.Unmarshal(data, &ports); err != nil {
 		return nil
 	}
+	// A legacy or interrupted provision can leave an empty JSON object behind.
+	// Treat it as absent so the caller allocates bounded, explicit host ports
+	// rather than rendering an unsafe implicit PublishPort mapping.
+	if len(ports) == 0 {
+		return nil
+	}
 	return ports
 }

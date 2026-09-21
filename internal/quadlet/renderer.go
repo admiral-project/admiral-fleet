@@ -55,6 +55,14 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 	if err := security.ValidateInstanceID(task.InstanceID); err != nil {
 		return fmt.Errorf("render quadlet: invalid instance_id: %w", err)
 	}
+	for _, svc := range task.Services {
+		if svc.Port <= 0 {
+			continue
+		}
+		if hostPort := r.HostPorts[svc.Name]; hostPort <= 0 {
+			return fmt.Errorf("render quadlet: service %q requires an allocated host port", svc.Name)
+		}
+	}
 	instanceDir := filepath.Join(r.DataDir, "instances", task.InstanceID)
 	envDir := filepath.Join(instanceDir, "env")
 	if err := os.MkdirAll(envDir, 0700); err != nil {
@@ -250,7 +258,11 @@ func SafeName(value string) string {
 func (r *Renderer) renderPod(task admiral.FleetTask) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=Admiral pod for instance %s\n\n", task.InstanceID)
-	fmt.Fprintf(&b, "[Pod]\nPodName=%s\n", podName(task.InstanceID))
+	// Rootless pasta assigns one network namespace to this pod. Containers in
+	// the same instance retain localhost connectivity while other customer pods
+	// do not share their network. Leave Podman's secure pasta defaults intact:
+	// in particular, never enable --map-gw or automatic host forwarding here.
+	fmt.Fprintf(&b, "[Pod]\nPodName=%s\nNetwork=pasta\n", podName(task.InstanceID))
 	if limit := formatCPULimit(task.Tier.CPU); limit != "" {
 		fmt.Fprintf(&b, "PodmanArgs=--cpus=%s\n", limit)
 	}
@@ -259,16 +271,8 @@ func (r *Renderer) renderPod(task admiral.FleetTask) string {
 	}
 	for _, svc := range task.Services {
 		if svc.Port > 0 {
-			hostPort, ok := r.HostPorts[svc.Name]
-			if ok && hostPort > 0 {
-				if r.PublishAddress != "" {
-					fmt.Fprintf(&b, "PublishPort=%s:%d:%d\n", r.PublishAddress, hostPort, svc.Port)
-				} else {
-					fmt.Fprintf(&b, "PublishPort=%d:%d\n", hostPort, svc.Port)
-				}
-			} else {
-				fmt.Fprintf(&b, "PublishPort=%d\n", svc.Port)
-			}
+			hostPort := r.HostPorts[svc.Name]
+			fmt.Fprintf(&b, "PublishPort=%s:%d:%d\n", r.PublishAddress, hostPort, svc.Port)
 		}
 	}
 	fmt.Fprintf(&b, "\n[Service]\nRestart=always\nTimeoutStartSec=900\n\n[Install]\nWantedBy=%s\n", r.wantedBy())

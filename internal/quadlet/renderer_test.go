@@ -61,6 +61,7 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	quadletDir := t.TempDir()
 	dataDir := t.TempDir()
 	renderer := NewRenderer(quadletDir, dataDir)
+	renderer.HostPorts = map[string]int{"app": 40000}
 
 	task := admiral.FleetTask{
 		InstanceID: "demo001",
@@ -101,11 +102,6 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 		}
 	}
 
-	// Verify no .network file is created when using pods
-	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-demo001.network")); err == nil {
-		t.Fatal("unexpected .network file when pod is used")
-	}
-
 	envPath := filepath.Join(dataDir, "instances", "demo001", "env", "db.env")
 	envData, err := os.ReadFile(envPath)
 	if err != nil {
@@ -138,13 +134,19 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	if !strings.Contains(gotPod, "PodName=admiral-demo001") {
 		t.Fatalf("expected PodName in pod file, got %q", gotPod)
 	}
+	if !strings.Contains(gotPod, "Network=pasta") {
+		t.Fatalf("expected rootless pasta network in pod file, got %q", gotPod)
+	}
+	if strings.Contains(gotPod, ".network") || strings.Contains(gotPod, "--map-gw") {
+		t.Fatalf("pod must not use a bridge network or map the host gateway, got %q", gotPod)
+	}
 	if !strings.Contains(gotPod, "PodmanArgs=--cpus=1.5") {
 		t.Fatalf("expected CPU limit in pod file, got %q", gotPod)
 	}
 	if !strings.Contains(gotPod, "PodmanArgs=--memory=1536m") {
 		t.Fatalf("expected memory limit in pod file, got %q", gotPod)
 	}
-	if !strings.Contains(gotPod, "PublishPort=80") {
+	if !strings.Contains(gotPod, "PublishPort=127.0.0.1:40000:80") {
 		t.Fatalf("expected PublishPort in pod file, got %q", gotPod)
 	}
 
@@ -240,6 +242,7 @@ func TestRendererRendersERPNextFrontendWithSitesAndLogs(t *testing.T) {
 	quadletDir := t.TempDir()
 	dataDir := t.TempDir()
 	renderer := NewRenderer(quadletDir, dataDir)
+	renderer.HostPorts = map[string]int{"frontend": 40001}
 
 	task := admiral.FleetTask{
 		InstanceID: "erpnext001",
@@ -359,6 +362,7 @@ func TestRendererSingleServiceWithTierLimitsCreatesPod(t *testing.T) {
 	quadletDir := t.TempDir()
 	dataDir := t.TempDir()
 	renderer := NewRenderer(quadletDir, dataDir)
+	renderer.HostPorts = map[string]int{"web": 40002}
 
 	task := admiral.FleetTask{
 		InstanceID: "single001",
@@ -384,9 +388,14 @@ func TestRendererSingleServiceWithTierLimitsCreatesPod(t *testing.T) {
 		t.Fatalf("expected pod file for single service tier limits: %v", err)
 	}
 
-	// Verify no network file either
-	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-single001.network")); err == nil {
-		t.Fatal("unexpected .network file for single service")
+	// A single-service instance needs the same tenant boundary as a multi-service
+	// instance; it must retain an individual rootless pasta namespace.
+	podData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-single001.pod"))
+	if err != nil {
+		t.Fatalf("read single-service pod: %v", err)
+	}
+	if !strings.Contains(string(podData), "Network=pasta") {
+		t.Fatalf("expected pasta for single service pod, got %q", podData)
 	}
 
 	// Verify container file exists and joins the pod
@@ -401,12 +410,27 @@ func TestRendererSingleServiceWithTierLimitsCreatesPod(t *testing.T) {
 	if !strings.Contains(got, "CgroupsMode=no-conmon") {
 		t.Fatalf("expected cgroups mode in container file, got %q", got)
 	}
-	podData, err := os.ReadFile(filepath.Join(quadletDir, "admiral-single001.pod"))
+	podData, err = os.ReadFile(filepath.Join(quadletDir, "admiral-single001.pod"))
 	if err != nil {
 		t.Fatalf("read pod file: %v", err)
 	}
-	if !strings.Contains(string(podData), "PublishPort=80") {
+	if !strings.Contains(string(podData), "PublishPort=127.0.0.1:40002:80") {
 		t.Fatalf("expected PublishPort in pod file, got %q", string(podData))
+	}
+}
+
+func TestRendererRejectsPublishedServiceWithoutAllocatedHostPort(t *testing.T) {
+	renderer := NewRenderer(t.TempDir(), t.TempDir())
+	err := renderer.Render(admiral.FleetTask{
+		InstanceID: "missing-port",
+		Services: []admiral.ServiceInfo{{
+			Name:  "web",
+			Image: "docker.io/library/nginx:1.27",
+			Port:  80,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires an allocated host port") {
+		t.Fatalf("expected missing host port error, got %v", err)
 	}
 }
 
