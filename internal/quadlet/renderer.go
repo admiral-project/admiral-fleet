@@ -272,6 +272,9 @@ func (r *Renderer) renderPod(task admiral.FleetTask) string {
 	for _, svc := range task.Services {
 		if svc.Port > 0 {
 			hostPort := r.HostPorts[svc.Name]
+			// A declared service port is an intentional endpoint on the worker's
+			// publish address. Network=pasta isolates the pod namespace; it does
+			// not make host-published ports exclusive to Caddy or the admin node.
 			fmt.Fprintf(&b, "PublishPort=%s:%d:%d\n", r.PublishAddress, hostPort, svc.Port)
 		}
 	}

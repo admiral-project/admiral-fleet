@@ -140,6 +140,11 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	if strings.Contains(gotPod, ".network") || strings.Contains(gotPod, "--map-gw") {
 		t.Fatalf("pod must not use a bridge network or map the host gateway, got %q", gotPod)
 	}
+	for _, unsafe := range []string{"Network=host", "--network=host", "--privileged"} {
+		if strings.Contains(gotPod, unsafe) {
+			t.Fatalf("pod must not weaken namespace isolation with %q, got %q", unsafe, gotPod)
+		}
+	}
 	if !strings.Contains(gotPod, "PodmanArgs=--cpus=1.5") {
 		t.Fatalf("expected CPU limit in pod file, got %q", gotPod)
 	}
@@ -148,6 +153,12 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	}
 	if !strings.Contains(gotPod, "PublishPort=127.0.0.1:40000:80") {
 		t.Fatalf("expected PublishPort in pod file, got %q", gotPod)
+	}
+	if strings.Count(gotPod, "PublishPort=") != 1 {
+		t.Fatalf("only the explicitly published app service may create a host listener, got %q", gotPod)
+	}
+	if strings.Contains(gotPod, ":5432") {
+		t.Fatalf("internal database port must remain private to the pod, got %q", gotPod)
 	}
 
 	// Verify container files reference the pod instead of network
@@ -167,6 +178,14 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	}
 	if !strings.Contains(got, "CgroupsMode=no-conmon") {
 		t.Fatalf("expected cgroups mode in container file, got %q", got)
+	}
+	if !strings.Contains(got, "NoNewPrivileges=true") {
+		t.Fatalf("expected no-new-privileges in container file, got %q", got)
+	}
+	for _, unsafe := range []string{"Privileged=true", "Network=host", "Pid=host", "IPC=host"} {
+		if strings.Contains(got, unsafe) {
+			t.Fatalf("container must not weaken pod isolation with %q, got %q", unsafe, got)
+		}
 	}
 
 	// Verify secrets are referenced via Secret= (Quadlet native) instead of raw env vars
