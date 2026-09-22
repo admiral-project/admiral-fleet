@@ -21,7 +21,7 @@ import (
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
-const FleetVersion = "0.0.1rc2"
+const FleetVersion = "0.0.1rc4"
 
 func (a *Agent) StartHeartbeatSender(ctx context.Context) {
 	startup := time.NewTimer(10 * time.Second)
