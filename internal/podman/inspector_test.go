@@ -25,6 +25,19 @@ type fakeRunner struct {
 	err   error
 }
 
+type deadlineRunner struct {
+	deadline time.Duration
+}
+
+func (r *deadlineRunner) Run(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil, errors.New("runner context has no deadline")
+	}
+	r.deadline = time.Until(deadline)
+	return []byte("ok"), nil
+}
+
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, call{name: name, args: append([]string(nil), args...)})
 	if r.err != nil {
@@ -71,6 +84,19 @@ func TestInspectorUsesPodmanArgumentArrays(t *testing.T) {
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestInspectorPullUsesExtendedTimeout(t *testing.T) {
+	runner := &deadlineRunner{}
+	inspector := NewInspector(runner)
+	inspector.Timeout = time.Second
+
+	if err := inspector.Pull(context.Background(), "docker.io/library/wordpress:6.8.1"); err != nil {
+		t.Fatalf("pull image: %v", err)
+	}
+	if runner.deadline < 9*time.Minute {
+		t.Fatalf("image pull deadline = %s, want at least 9 minutes", runner.deadline)
 	}
 }
 

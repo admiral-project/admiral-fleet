@@ -66,9 +66,10 @@ func (r CommandRunner) runWithStdin(ctx context.Context, stdin io.Reader, name s
 type Inspector struct {
 	Runner         Runner
 	Timeout        time.Duration
-	RootlessUser   string // empty = run as root; set = run via sudo -u
-	TempDir        string // shared with the rootless user manager when PrivateTmp is enabled
-	RemoteRootless bool   // delegate every Podman invocation to a rootless helper
+	PullTimeout    time.Duration // image pulls; zero uses the bounded pull default
+	RootlessUser   string        // empty = run as root; set = run via sudo -u
+	TempDir        string        // shared with the rootless user manager when PrivateTmp is enabled
+	RemoteRootless bool          // delegate every Podman invocation to a rootless helper
 }
 
 // IDMapEntry describes one user-namespace mapping line. Container IDs map to
@@ -135,7 +136,13 @@ func (i *Inspector) Pull(ctx context.Context, image string) error {
 	if image == "" {
 		return fmt.Errorf("image reference is required")
 	}
-	if _, err := i.run(ctx, "pull", image); err != nil {
+	timeout := i.PullTimeout
+	if timeout == 0 {
+		timeout = 10 * time.Minute
+	}
+	pullInspector := *i
+	pullInspector.Timeout = timeout
+	if _, err := pullInspector.run(ctx, "pull", image); err != nil {
 		return fmt.Errorf("pull image %q: %w", image, err)
 	}
 	return nil
