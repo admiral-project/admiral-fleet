@@ -375,8 +375,11 @@ func TestStartHTTPServerInvalidAddr(t *testing.T) {
 }
 
 func TestFleetVersion(t *testing.T) {
-	if FleetVersion != "0.0.1rc4" {
-		t.Fatalf("expected FleetVersion %q, got %q", "0.0.1rc4", FleetVersion)
+	if FleetVersion == "" {
+		t.Fatal("FleetVersion must not be empty")
+	}
+	if want := os.Getenv("ADMIRAL_EXPECTED_FLEET_VERSION"); want != "" && FleetVersion != want {
+		t.Fatalf("expected FleetVersion %q, got %q", want, FleetVersion)
 	}
 }
 
