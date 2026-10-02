@@ -482,6 +482,58 @@ func TestStartHeartbeatSender_Cancel(t *testing.T) {
 	ag.StartHeartbeatSender(ctx)
 }
 
+func TestStartHeartbeatSenderSendsInitialHeartbeatAfterStartupGrace(t *testing.T) {
+	heartbeatReceived := make(chan admiral.HeartbeatRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/nodes/heartbeat" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var heartbeat admiral.HeartbeatRequest
+		if err := json.NewDecoder(r.Body).Decode(&heartbeat); err != nil {
+			http.Error(w, "invalid heartbeat", http.StatusBadRequest)
+			return
+		}
+		heartbeatReceived <- heartbeat
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ag := &Agent{
+		NodeID:     "single-node-worker",
+		APIURL:     server.URL,
+		FleetToken: "test-token",
+		http:       server.Client(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ag.StartHeartbeatSender(ctx)
+	}()
+
+	select {
+	case heartbeat := <-heartbeatReceived:
+		cancel()
+		if heartbeat.NodeID != "single-node-worker" {
+			t.Fatalf("unexpected heartbeat node ID %q", heartbeat.NodeID)
+		}
+	case <-time.After(15 * time.Second):
+		cancel()
+		t.Fatal("Fleet did not send its initial heartbeat shortly after startup")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("heartbeat sender did not stop after cancellation")
+	}
+}
+
 func TestIPAllowed(t *testing.T) {
 	tests := []struct {
 		name           string

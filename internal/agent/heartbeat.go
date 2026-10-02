@@ -32,6 +32,11 @@ func (a *Agent) StartHeartbeatSender(ctx context.Context) {
 	case <-startup.C:
 	}
 
+	// Register readiness with admirald as soon as the startup grace period
+	// expires. Waiting for the first ticker event here delayed the initial
+	// heartbeat by another full interval.
+	a.sendHeartbeat(ctx)
+
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
