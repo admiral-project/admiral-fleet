@@ -454,41 +454,8 @@ func (e *SystemdPodmanExecutor) restoreDatabase(ctx context.Context, task admira
 	}
 
 	dbEngine := normalizeDatabaseType(task.Restore.DatabaseType)
-	if dbEngine == "mysql" || dbEngine == "mariadb" {
-		pingCmd := "mysqladmin"
-		if dbEngine == "mariadb" || strings.Contains(strings.ToLower(svc.Image), "mariadb") {
-			pingCmd = "mariadb-admin"
-		}
-		for i := 0; i < 15; i++ {
-			out, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"MYSQL_PWD": password}, pingCmd, "-h", "127.0.0.1", "ping", "-u", username, "--silent")
-			if err == nil && strings.TrimSpace(string(out)) == "mysqld is alive" {
-				break
-			}
-			if i == 14 {
-				return fmt.Errorf("database in container %q not ready after 30s: %w", container, err)
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(2 * time.Second):
-			}
-		}
-	}
-	if dbEngine == "postgresql" {
-		for i := 0; i < 15; i++ {
-			out, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"PGPASSWORD": password}, "pg_isready", "-U", username, "-d", databaseName)
-			if err == nil && strings.Contains(string(out), "accepting connections") {
-				break
-			}
-			if i == 14 {
-				return fmt.Errorf("database in container %q not ready after 30s: %w", container, err)
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(2 * time.Second):
-			}
-		}
+	if err := e.waitDatabaseReady(ctx, dbEngine, container, svc.Image, username, password, databaseName); err != nil {
+		return err
 	}
 
 	if _, err := e.podman().CopyToContainer(ctx, rawPath, container+":/tmp/admiral-restore.dump"); err != nil {

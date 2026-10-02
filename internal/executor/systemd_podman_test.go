@@ -43,10 +43,18 @@ type fakeOverride struct {
 	contains string
 }
 
+type fakePodmanResponse struct {
+	output []byte
+	err    error
+}
+
 type fakePodmanRunner struct {
-	calls           [][]string
-	overrides       map[string]fakeOverride
-	inspectFailures int
+	calls                [][]string
+	overrides            map[string]fakeOverride
+	inspectFailures      int
+	execSequenceContains string
+	execSequence         []fakePodmanResponse
+	execSequenceIndex    int
 }
 
 func (r *fakePodmanRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -71,6 +79,11 @@ func (r *fakePodmanRunner) Run(_ context.Context, name string, args ...string) (
 		}
 	}
 	joined := strings.Join(call, " ")
+	if r.execSequenceContains != "" && strings.Contains(joined, r.execSequenceContains) && r.execSequenceIndex < len(r.execSequence) {
+		response := r.execSequence[r.execSequenceIndex]
+		r.execSequenceIndex++
+		return response.output, response.err
+	}
 	if r.inspectFailures > 0 && strings.Contains(joined, "podman container inspect") {
 		r.inspectFailures--
 		return nil, errors.New("exit status 125: Error: no such container")
@@ -355,7 +368,13 @@ func TestSystemdPodmanExecutorInspectAppSnapshot(t *testing.T) {
 }
 
 func TestSystemdPodmanExecutorBackupUsesPodInfraContainer(t *testing.T) {
-	podmanRunner := &fakePodmanRunner{}
+	podmanRunner := &fakePodmanRunner{
+		execSequenceContains: "mariadb-admin",
+		execSequence: []fakePodmanResponse{
+			{err: errors.New("database is starting")},
+			{output: []byte("mysqld is alive")},
+		},
+	}
 	systemdRunner := &fakeSystemdRunner{}
 	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", testRootlessUser(t), fakeFS{}, fakeUserLookup{})
 
@@ -399,16 +418,83 @@ func TestSystemdPodmanExecutorBackupUsesPodInfraContainer(t *testing.T) {
 	if !strings.Contains(res.Metadata, `"storage_key":"demo001/mysql-database-op_3.tar.gz"`) {
 		t.Fatalf("expected relative local backup key in metadata, got %s", res.Metadata)
 	}
-	found := false
-	for _, call := range podmanRunner.calls {
+	readyCalls := 0
+	lastReadyIndex := -1
+	dumpIndex := -1
+	for index, call := range podmanRunner.calls {
 		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "mariadb-admin") && strings.Contains(joined, " ping ") {
+			readyCalls++
+			lastReadyIndex = index
+		}
 		if strings.Contains(joined, "podman exec") && strings.Contains(joined, "--env-file") && strings.Contains(joined, "mariadb-dump") {
-			found = true
-			break
+			dumpIndex = index
 		}
 	}
-	if !found {
-		t.Fatalf("expected backup to exec against db service container, calls: %#v", podmanRunner.calls)
+	if readyCalls != 2 {
+		t.Fatalf("expected backup to retry database readiness before dumping, got %d readiness probes: %#v", readyCalls, podmanRunner.calls)
+	}
+	if dumpIndex < 0 || dumpIndex <= lastReadyIndex {
+		t.Fatalf("expected backup dump after database readiness probes, calls: %#v", podmanRunner.calls)
+	}
+}
+
+func TestSystemdPodmanExecutorPostgresBackupWaitsForReadiness(t *testing.T) {
+	podmanRunner := &fakePodmanRunner{
+		execSequenceContains: "pg_isready",
+		execSequence: []fakePodmanResponse{
+			{err: errors.New("no response from database")},
+			{output: []byte("127.0.0.1:5432 - accepting connections")},
+		},
+	}
+	systemdRunner := &fakeSystemdRunner{}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", testRootlessUser(t), fakeFS{}, fakeUserLookup{})
+
+	result := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:      "task_pg_backup",
+		OperationID: "op_pg_backup",
+		NodeID:      "node_1",
+		Action:      admiral.ActionBackupDatabase,
+		InstanceID:  "demo001",
+		Services: []admiral.ServiceInfo{{
+			Name:  "db",
+			Image: "docker.io/library/postgres:16",
+			Env: map[string]string{
+				"POSTGRES_DB":       "gitea",
+				"POSTGRES_USER":     "user",
+				"POSTGRES_PASSWORD": "secret",
+			},
+		}},
+		Backup: &admiral.BackupInfo{
+			Service:      "db",
+			DatabaseType: "postgresql",
+			DatabaseEnv:  "POSTGRES_DB",
+			UsernameEnv:  "POSTGRES_USER",
+			PasswordEnv:  "POSTGRES_PASSWORD",
+		},
+	}, "node_1")
+
+	if !result.Success {
+		t.Fatalf("expected PostgreSQL backup to succeed after readiness converged, got %q", result.Error)
+	}
+	readyCalls := 0
+	lastReadyIndex := -1
+	dumpIndex := -1
+	for index, call := range podmanRunner.calls {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "pg_isready") {
+			readyCalls++
+			lastReadyIndex = index
+		}
+		if strings.Contains(joined, "podman exec") && strings.Contains(joined, "pg_dump") {
+			dumpIndex = index
+		}
+	}
+	if readyCalls != 2 {
+		t.Fatalf("expected two PostgreSQL readiness probes, got %d: %#v", readyCalls, podmanRunner.calls)
+	}
+	if dumpIndex < 0 || dumpIndex <= lastReadyIndex {
+		t.Fatalf("expected pg_dump after database readiness probes, calls: %#v", podmanRunner.calls)
 	}
 }
 

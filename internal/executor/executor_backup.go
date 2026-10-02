@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -257,7 +258,7 @@ func (e *SystemdPodmanExecutor) collectDatabaseBackup(ctx context.Context, task 
 	case "postgresql", "postgres", "postgresql16":
 		return e.collectPostgresBackup(ctx, task, svc)
 	case "mysql", "mariadb":
-		return e.collectMySQLBackup(ctx, task, svc)
+		return e.collectMySQLBackup(ctx, task, svc, databaseType)
 	default:
 		return nil, fmt.Errorf("unsupported database backup type %q", databaseType)
 	}
@@ -276,10 +277,14 @@ func (e *SystemdPodmanExecutor) collectPostgresBackup(ctx context.Context, task 
 	if !ok || strings.TrimSpace(password) == "" {
 		return nil, fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
 	}
-	return e.podman().ExecWithEnv(ctx, executionContainerNameForService(task, svc), map[string]string{"PGPASSWORD": password}, "pg_dump", "-Fc", "-h", "127.0.0.1", "-U", username, databaseName)
+	container := executionContainerNameForService(task, svc)
+	if err := e.waitDatabaseReady(ctx, "postgresql", container, svc.Image, username, password, databaseName); err != nil && !errors.Is(err, errDatabaseReadinessProbeUnavailable) {
+		return nil, err
+	}
+	return e.podman().ExecWithEnv(ctx, container, map[string]string{"PGPASSWORD": password}, "pg_dump", "-Fc", "-h", "127.0.0.1", "-U", username, databaseName)
 }
 
-func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task admiral.FleetTask, svc admiral.ServiceInfo) ([]byte, error) {
+func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task admiral.FleetTask, svc admiral.ServiceInfo, databaseType string) ([]byte, error) {
 	databaseName, ok := lookupEnv(svc, task.Backup.DatabaseEnv)
 	if !ok || strings.TrimSpace(databaseName) == "" {
 		return nil, fmt.Errorf("database env %q is missing", task.Backup.DatabaseEnv)
@@ -292,11 +297,15 @@ func (e *SystemdPodmanExecutor) collectMySQLBackup(ctx context.Context, task adm
 	if !ok || strings.TrimSpace(password) == "" {
 		return nil, fmt.Errorf("password env %q is missing", task.Backup.PasswordEnv)
 	}
+	container := executionContainerNameForService(task, svc)
+	if err := e.waitDatabaseReady(ctx, databaseType, container, svc.Image, username, password, databaseName); err != nil && !errors.Is(err, errDatabaseReadinessProbeUnavailable) {
+		return nil, err
+	}
 	dumpCmd := "mysqldump"
-	if strings.EqualFold(task.Backup.DatabaseType, "mariadb") || strings.Contains(strings.ToLower(svc.Image), "mariadb") {
+	if strings.EqualFold(databaseType, "mariadb") || strings.Contains(strings.ToLower(svc.Image), "mariadb") {
 		dumpCmd = "mariadb-dump"
 	}
-	data, err := e.podman().ExecWithEnv(ctx, executionContainerNameForService(task, svc), map[string]string{"MYSQL_PWD": password}, dumpCmd, "--single-transaction", "--quick", "--routines", "--events", "--triggers", "--skip-lock-tables", "-h", "127.0.0.1", "-u", username, databaseName)
+	data, err := e.podman().ExecWithEnv(ctx, container, map[string]string{"MYSQL_PWD": password}, dumpCmd, "--single-transaction", "--quick", "--routines", "--events", "--triggers", "--skip-lock-tables", "-h", "127.0.0.1", "-u", username, databaseName)
 	if err == nil {
 		return data, nil
 	}
