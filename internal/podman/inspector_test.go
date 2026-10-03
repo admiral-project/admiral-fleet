@@ -522,6 +522,25 @@ func TestInspectorUsesUserBusForRootlessSecrets(t *testing.T) {
 	}
 }
 
+func TestSecretRemoveIgnoresNotFound(t *testing.T) {
+	runner := &fakeRunner{err: errors.New(`exit status 125: Error: no secret with name or id "missing": no such secret`)}
+	inspector := NewInspector(runner)
+
+	if err := inspector.SecretRemove(context.Background(), "missing"); err != nil {
+		t.Fatalf("expected missing secret removal to be idempotent, got %v", err)
+	}
+}
+
+func TestSecretRemovePropagatesOtherErrors(t *testing.T) {
+	runner := &fakeRunner{err: errors.New("exit status 125: permission denied")}
+	inspector := NewInspector(runner)
+
+	err := inspector.SecretRemove(context.Background(), "demo-secret")
+	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("expected removal error to propagate, got %v", err)
+	}
+}
+
 func TestInspectorUsesUserBusForRootlessExec(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)

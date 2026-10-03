@@ -699,8 +699,8 @@ func TestSystemdPodmanExecutorDeprovisionRemovesPodAndVolumeUnits(t *testing.T) 
 			Memory: "512MiB",
 		},
 		Services: []admiral.ServiceInfo{
-			{Name: "web", Image: "docker.io/library/wordpress:6", Port: 80},
-			{Name: "db", Image: "docker.io/library/mariadb:10", Volume: "db_data"},
+			{Name: "web", Image: "docker.io/library/wordpress:6", Port: 80, Secrets: map[string]string{"WORDPRESS_DB_PASSWORD": "value"}},
+			{Name: "db", Image: "docker.io/library/mariadb:10", Volume: "db_data", Secrets: map[string]string{"MARIADB_ROOT_PASSWORD": "value"}},
 		},
 	}, "node_1")
 
@@ -721,6 +721,8 @@ func TestSystemdPodmanExecutorDeprovisionRemovesPodAndVolumeUnits(t *testing.T) 
 
 	foundRemovePod := false
 	foundRemoveVolume := false
+	foundRemoveWebSecret := false
+	foundRemoveDBSecret := false
 	for _, call := range podmanRunner.calls {
 		joined := strings.Join(call, " ")
 		if strings.Contains(joined, "podman pod rm --force admiral-demo001") {
@@ -729,12 +731,49 @@ func TestSystemdPodmanExecutorDeprovisionRemovesPodAndVolumeUnits(t *testing.T) 
 		if strings.Contains(joined, "podman volume rm --force admiral-demo001-db") {
 			foundRemoveVolume = true
 		}
+		if strings.Contains(joined, "podman secret rm admiral-demo001-web-WORDPRESS_DB_PASSWORD") {
+			foundRemoveWebSecret = true
+		}
+		if strings.Contains(joined, "podman secret rm admiral-demo001-db-MARIADB_ROOT_PASSWORD") {
+			foundRemoveDBSecret = true
+		}
 	}
 	if !foundRemovePod {
 		t.Fatalf("expected pod removal, calls: %#v", podmanRunner.calls)
 	}
 	if !foundRemoveVolume {
 		t.Fatalf("expected volume removal, calls: %#v", podmanRunner.calls)
+	}
+	if !foundRemoveWebSecret || !foundRemoveDBSecret {
+		t.Fatalf("expected per-service secret removal, calls: %#v", podmanRunner.calls)
+	}
+}
+
+func TestSystemdPodmanExecutorDeprovisionFailsWhenSecretRemovalFails(t *testing.T) {
+	podmanRunner := &fakePodmanRunner{overrides: map[string]fakeOverride{
+		"secret-remove": {
+			contains: "podman secret rm admiral-demo001-web-WORDPRESS_DB_PASSWORD",
+			err:      errors.New("exit status 125: permission denied"),
+		},
+	}}
+	systemdRunner := &fakeSystemdRunner{}
+	dir := t.TempDir()
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), dir, dir, "nobody", fakeFS{}, fakeUserLookup{})
+
+	res := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:      "task_4",
+		OperationID: "op_4",
+		NodeID:      "node_1",
+		Action:      admiral.ActionDeprovisionApp,
+		InstanceID:  "demo001",
+		Services: []admiral.ServiceInfo{{
+			Name:    "web",
+			Secrets: map[string]string{"WORDPRESS_DB_PASSWORD": ""},
+		}},
+	}, "node_1")
+
+	if res.Success || !strings.Contains(res.Error, "permission denied") {
+		t.Fatalf("expected secret removal failure, got success=%v error=%q", res.Success, res.Error)
 	}
 }
 

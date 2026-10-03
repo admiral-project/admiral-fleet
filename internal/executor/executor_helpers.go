@@ -6,6 +6,7 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -365,11 +366,15 @@ func (e *SystemdPodmanExecutor) createPodmanSecrets(ctx context.Context, task ad
 
 // removePodmanSecrets removes Podman secrets for the given task's services.
 // This should be called during deprovision to clean up the secret store.
-func (e *SystemdPodmanExecutor) removePodmanSecrets(ctx context.Context, task admiral.FleetTask) {
+func (e *SystemdPodmanExecutor) removePodmanSecrets(ctx context.Context, task admiral.FleetTask) error {
+	var removeErrors []error
 	for _, svc := range task.Services {
 		for k := range svc.Secrets {
 			name := quadlet.SecretName(task.InstanceID, svc.Name, k)
-			_ = e.podman().SecretRemove(ctx, name)
+			if err := e.podman().SecretRemove(ctx, name); err != nil {
+				removeErrors = append(removeErrors, fmt.Errorf("remove secret %q: %w", name, err))
+			}
 		}
 	}
+	return errors.Join(removeErrors...)
 }

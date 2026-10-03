@@ -471,11 +471,22 @@ func (i *Inspector) SecretCreate(ctx context.Context, name, value string) error 
 	return nil
 }
 
-// SecretRemove removes a Podman secret by name.
-// Errors are returned as-is (caller should ignore not-found if idempotency is desired).
+// SecretRemove removes a Podman secret by name. Missing secrets are treated as
+// already removed so a retried deprovision remains idempotent.
 func (i *Inspector) SecretRemove(ctx context.Context, name string) error {
 	_, err := i.runSecretWithStdin(ctx, nil, "rm", name)
+	if err != nil && isPodmanSecretNotFound(err) {
+		return nil
+	}
 	return err
+}
+
+func isPodmanSecretNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no secret with name or id") || strings.Contains(message, "no such secret")
 }
 
 func (i *Inspector) runSecretWithStdin(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
