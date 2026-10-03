@@ -166,7 +166,7 @@ func (e *SystemdPodmanExecutor) helperCommandArgs(rootlessUID, action string) ([
 	}
 	xdgRuntimeDir := filepath.Join("/run/user", rootlessUID)
 	binary := e.helperBinaryPath()
-	return []string{
+	args := []string{
 		"-u", e.RootlessUser, "--",
 		"env",
 		"HOME=" + rootlessUser.HomeDir,
@@ -174,8 +174,12 @@ func (e *SystemdPodmanExecutor) helperCommandArgs(rootlessUID, action string) ([
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(xdgRuntimeDir, "bus"),
 		"ADMIRAL_FLEET_DATA_DIR=" + e.DataDir,
 		"ADMIRAL_FLEET_ROOTLESS_USER=" + e.RootlessUser,
-		binary, action,
-	}, nil
+	}
+	if strings.TrimSpace(e.RestoreCACertFile) != "" {
+		args = append(args, "ADMIRAL_API_CA_FILE="+e.RestoreCACertFile)
+	}
+	args = append(args, binary, action)
+	return args, nil
 }
 
 func (e *SystemdPodmanExecutor) helperBinaryPath() string {

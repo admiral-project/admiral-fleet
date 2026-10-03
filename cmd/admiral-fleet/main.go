@@ -122,6 +122,7 @@ func buildExecutor(cfg *config.Config) executor.Executor {
 	switch cfg.Executor {
 	case "systemd-podman":
 		exec := executor.NewSystemdPodman(nil, nil, cfg.QuadletDir, cfg.DataDir, cfg.RootlessUser)
+		exec.RestoreCACertFile = cfg.APICACertFile
 		// Data-plane backup/restore runs in admiral-fleet-backup as the
 		// rootless user so artifacts are never chowned between root and the
 		// workload user.

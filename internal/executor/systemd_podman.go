@@ -22,14 +22,15 @@ import (
 )
 
 type SystemdPodmanExecutor struct {
-	Systemd      *systemd.Manager
-	Podman       *podman.Inspector
-	Renderer     *quadlet.Renderer
-	FS           osutil.FileSystem
-	UserLookup   osutil.UserLookup
-	DataDir      string
-	RootlessUser string // empty = rootful; set = rootless systemd --user target
-	portMu       sync.Mutex
+	Systemd           *systemd.Manager
+	Podman            *podman.Inspector
+	Renderer          *quadlet.Renderer
+	FS                osutil.FileSystem
+	UserLookup        osutil.UserLookup
+	DataDir           string
+	RootlessUser      string // empty = rootful; set = rootless systemd --user target
+	RestoreCACertFile string
+	portMu            sync.Mutex
 
 	// DelegateBackup and DelegateRestore run the data-plane backup/restore
 	// in the admiral-fleet-backup helper as the rootless user instead of

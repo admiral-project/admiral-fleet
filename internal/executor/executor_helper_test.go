@@ -168,9 +168,10 @@ func TestPrepareStorageRootsSkipsWithoutRootlessUser(t *testing.T) {
 
 func TestHelperCommandArgs(t *testing.T) {
 	exec := &SystemdPodmanExecutor{
-		UserLookup:   fakeUserLookup{},
-		RootlessUser: "admiral-apps",
-		DataDir:      "/var/lib/admiral",
+		UserLookup:        fakeUserLookup{},
+		RootlessUser:      "admiral-apps",
+		DataDir:           "/var/lib/admiral",
+		RestoreCACertFile: "/etc/admiral/tls/ca.pem",
 	}
 	args, err := exec.helperCommandArgs("991", helperActionBackup)
 	if err != nil {
@@ -184,6 +185,7 @@ func TestHelperCommandArgs(t *testing.T) {
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/991/bus",
 		"ADMIRAL_FLEET_DATA_DIR=/var/lib/admiral",
 		"ADMIRAL_FLEET_ROOTLESS_USER=admiral-apps",
+		"ADMIRAL_API_CA_FILE=/etc/admiral/tls/ca.pem",
 	}
 	got := args[:len(want)]
 	if !reflect.DeepEqual(got, want) {

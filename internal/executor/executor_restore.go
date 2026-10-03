@@ -9,6 +9,8 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -362,7 +364,7 @@ func isPrivateHost(host string) error {
 	return err
 }
 
-func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trustedSourceOrigin, trustedSourcePathPrefix string, trustedSourceIPs []string) (*http.Client, error) {
+func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trustedSourceOrigin, trustedSourcePathPrefix string, trustedSourceIPs []string, trustedCACertFile string) (*http.Client, error) {
 	parsed, err := url.Parse(sourceURI)
 	if err != nil {
 		return nil, err
@@ -381,6 +383,26 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trust
 	}
 	if err != nil {
 		return nil, err
+	}
+	var rootCAs *x509.CertPool
+	if trustedSourceOrigin != "" {
+		if strings.TrimSpace(trustedCACertFile) == "" {
+			return nil, fmt.Errorf("trusted Harbor restore requires a configured Admiral CA certificate")
+		}
+		rootCAs, err = x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("load system certificate roots for Harbor restore: %w", err)
+		}
+		if rootCAs == nil {
+			return nil, fmt.Errorf("load system certificate roots for Harbor restore: system root pool is unavailable")
+		}
+		caPEM, readErr := os.ReadFile(trustedCACertFile)
+		if readErr != nil {
+			return nil, fmt.Errorf("read Admiral CA certificate %q for Harbor restore: %w", trustedCACertFile, readErr)
+		}
+		if !rootCAs.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("Admiral CA certificate %q contains no valid certificates", trustedCACertFile)
+		}
 	}
 	var mu sync.RWMutex
 	pinned := map[string][]net.IP{strings.ToLower(parsed.Hostname()): initial}
@@ -404,6 +426,7 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trust
 		return nil
 	}
 	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: rootCAs, MinVersion: tls.VersionTLS12},
 		DialContext: func(dialCtx context.Context, _, address string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(address)
 			if err != nil {
@@ -441,7 +464,7 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 	if parsed.Scheme != "https" {
 		return "", fmt.Errorf("restore uri must use https")
 	}
-	client, err := newRestoreHTTPClient(ctx, sourceURI, restore.TrustedSourceIP, restore.TrustedSourceOrigin, restore.TrustedSourcePathPrefix, restore.TrustedSourceIPs)
+	client, err := newRestoreHTTPClient(ctx, sourceURI, restore.TrustedSourceIP, restore.TrustedSourceOrigin, restore.TrustedSourcePathPrefix, restore.TrustedSourceIPs, e.RestoreCACertFile)
 	if err != nil {
 		return "", fmt.Errorf("restore uri rejected: %w", err)
 	}
