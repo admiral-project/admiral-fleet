@@ -107,7 +107,8 @@ func (e *SystemdPodmanExecutor) restoreBackup(ctx context.Context, task admiral.
 			result.Error = err.Error()
 			return result
 		}
-		return e.delegateDataTask(ctx, task, result, helperActionRestore)
+		result = e.delegateDataTask(ctx, task, result, helperActionRestore)
+		return e.pauseAfterRestore(ctx, task, result)
 	}
 
 	artifactPath, err := e.fetchRestoreArtifact(ctx, task)
@@ -129,12 +130,27 @@ func (e *SystemdPodmanExecutor) restoreBackup(ctx context.Context, task admiral.
 	if err := e.applyRestoreArtifact(ctx, task, artifactPath); err != nil {
 		result.Success = false
 		result.Error = err.Error()
-		return result
+		return e.pauseAfterRestore(ctx, task, result)
 	}
 
 	result.Success = true
 	result.Logs = fmt.Sprintf("restored backup %s for instance %s", task.Restore.BackupID, task.InstanceID)
 	result.Metadata = fmt.Sprintf(`{"executor":"systemd-podman","restore":{"backup_id":%q,"artifact":%q}}`, task.Restore.BackupID, artifactPath)
+	return e.pauseAfterRestore(ctx, task, result)
+}
+
+func (e *SystemdPodmanExecutor) pauseAfterRestore(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	if len(unitNames(task)) == 0 {
+		return result
+	}
+	if err := e.podman().PodPause(ctx, podName(task.InstanceID)); err != nil {
+		result.Success = false
+		if result.Error == "" {
+			result.Error = fmt.Sprintf("restore completed but the instance could not be left paused: %v", err)
+		} else {
+			result.Error = fmt.Sprintf("%s; also failed to leave the instance paused: %v", result.Error, err)
+		}
+	}
 	return result
 }
 
@@ -150,7 +166,7 @@ func (e *SystemdPodmanExecutor) fetchRestoreArtifact(ctx context.Context, task a
 		}
 		return path, nil
 	case "https":
-		return e.downloadRestoreArtifact(ctx, task.Restore.StorageKey)
+		return e.downloadRestoreArtifact(ctx, task.Restore.StorageKey, task.Restore.TrustedSourceIP)
 	case "s3":
 		return e.downloadS3Artifact(ctx, task)
 	default:
@@ -233,7 +249,15 @@ func isRestrictedIP(ip net.IP) bool {
 	return false
 }
 
-func resolveRestoreHost(ctx context.Context, host string) ([]net.IP, error) {
+func trustedRestoreIP(trustedSourceIP string) net.IP {
+	ip := net.ParseIP(strings.TrimSpace(trustedSourceIP))
+	if ip == nil || !ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return nil
+	}
+	return ip
+}
+
+func resolveRestoreHost(ctx context.Context, host, trustedSourceIP string) ([]net.IP, error) {
 	if host == "" {
 		return nil, fmt.Errorf("empty host")
 	}
@@ -244,7 +268,8 @@ func resolveRestoreHost(ctx context.Context, host string) ([]net.IP, error) {
 	}
 	// Try direct IP parsing first
 	if ip := net.ParseIP(h); ip != nil {
-		if isRestrictedIP(ip) {
+		trustedIP := trustedRestoreIP(trustedSourceIP)
+		if isRestrictedIP(ip) && (trustedIP == nil || !ip.Equal(trustedIP)) {
 			return nil, fmt.Errorf("refuse connection to private or restricted IP %q", ip)
 		}
 		return []net.IP{ip}, nil
@@ -258,9 +283,10 @@ func resolveRestoreHost(ctx context.Context, host string) ([]net.IP, error) {
 		return nil, fmt.Errorf("host %q has no addresses", h)
 	}
 	ips := make([]net.IP, 0, len(addrInfos))
+	trustedIP := trustedRestoreIP(trustedSourceIP)
 	for _, addr := range addrInfos {
 		ip := net.IP(addr.AsSlice())
-		if isRestrictedIP(ip) {
+		if isRestrictedIP(ip) && (trustedIP == nil || !ip.Equal(trustedIP)) {
 			return nil, fmt.Errorf("refuse connection to host %q resolving to private or restricted IP %q", h, ip)
 		}
 		ips = append(ips, ip)
@@ -269,11 +295,11 @@ func resolveRestoreHost(ctx context.Context, host string) ([]net.IP, error) {
 }
 
 func isPrivateHost(host string) error {
-	_, err := resolveRestoreHost(context.Background(), host)
+	_, err := resolveRestoreHost(context.Background(), host, "")
 	return err
 }
 
-func newRestoreHTTPClient(ctx context.Context, sourceURI string) (*http.Client, error) {
+func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP string) (*http.Client, error) {
 	parsed, err := url.Parse(sourceURI)
 	if err != nil {
 		return nil, err
@@ -281,7 +307,7 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI string) (*http.Client, 
 	if parsed.Scheme != "https" {
 		return nil, fmt.Errorf("restore uri must use https")
 	}
-	initial, err := resolveRestoreHost(ctx, parsed.Host)
+	initial, err := resolveRestoreHost(ctx, parsed.Host, trustedSourceIP)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +317,7 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI string) (*http.Client, 
 		if target.Scheme != "https" {
 			return fmt.Errorf("restore redirect must use https")
 		}
-		ips, err := resolveRestoreHost(ctx, target.Host)
+		ips, err := resolveRestoreHost(ctx, target.Host, trustedSourceIP)
 		if err != nil {
 			return err
 		}
@@ -330,7 +356,7 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI string) (*http.Client, 
 	return client, nil
 }
 
-func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sourceURI string) (string, error) {
+func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sourceURI, trustedSourceIP string) (string, error) {
 	parsed, err := url.Parse(sourceURI)
 	if err != nil {
 		return "", fmt.Errorf("parse restore uri: %w", err)
@@ -338,7 +364,7 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 	if parsed.Scheme != "https" {
 		return "", fmt.Errorf("restore uri must use https")
 	}
-	client, err := newRestoreHTTPClient(ctx, sourceURI)
+	client, err := newRestoreHTTPClient(ctx, sourceURI, trustedSourceIP)
 	if err != nil {
 		return "", fmt.Errorf("restore uri rejected: %w", err)
 	}

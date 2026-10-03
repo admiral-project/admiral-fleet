@@ -654,21 +654,31 @@ func TestSystemdPodmanExecutorRestoreUnpausesPausedPod(t *testing.T) {
 	}
 
 	foundUnpause := false
-	foundRestore := false
-	for _, call := range podmanRunner.calls {
+	restoreCall := -1
+	pauseCall := -1
+	for i, call := range podmanRunner.calls {
 		joined := strings.Join(call, " ")
 		if strings.Contains(joined, "podman pod unpause admiral-demo001") {
 			foundUnpause = true
 		}
+		if strings.Contains(joined, "podman pod pause admiral-demo001") {
+			pauseCall = i
+		}
 		if strings.Contains(joined, "pg_restore") {
-			foundRestore = true
+			restoreCall = i
 		}
 	}
 	if !foundUnpause {
 		t.Fatalf("expected podman pod unpause before restore on paused pod, calls: %#v", podmanRunner.calls)
 	}
-	if !foundRestore {
+	if restoreCall < 0 {
 		t.Fatalf("expected pg_restore after unpause, calls: %#v", podmanRunner.calls)
+	}
+	if pauseCall < 0 {
+		t.Fatalf("expected podman to pause the instance after restore, calls: %#v", podmanRunner.calls)
+	}
+	if pauseCall <= restoreCall {
+		t.Fatalf("expected pause after pg_restore, got restore call %d and pause call %d: %#v", restoreCall, pauseCall, podmanRunner.calls)
 	}
 }
 
