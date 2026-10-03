@@ -166,7 +166,7 @@ func (e *SystemdPodmanExecutor) fetchRestoreArtifact(ctx context.Context, task a
 		}
 		return path, nil
 	case "https":
-		return e.downloadRestoreArtifact(ctx, task.Restore.StorageKey, task.Restore.TrustedSourceIP)
+		return e.downloadRestoreArtifact(ctx, task.Restore.StorageKey, *task.Restore)
 	case "s3":
 		return e.downloadS3Artifact(ctx, task)
 	default:
@@ -294,12 +294,75 @@ func resolveRestoreHost(ctx context.Context, host, trustedSourceIP string) ([]ne
 	return ips, nil
 }
 
+func restoreOrigin(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+func validTrustedRestorePath(parsed *url.URL, pathPrefix string) bool {
+	if parsed == nil || pathPrefix == "" || !strings.HasPrefix(parsed.Path, pathPrefix) {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(parsed.Path, pathPrefix), "/")
+	return len(parts) == 2 && strings.HasPrefix(parts[0], "upbk_") && parts[1] == "download"
+}
+
+func resolveTrustedRestoreOrigin(ctx context.Context, parsed *url.URL, origin, pathPrefix string, allowedAddresses []string) ([]net.IP, error) {
+	if parsed == nil || parsed.User != nil || parsed.Fragment != "" {
+		return nil, fmt.Errorf("invalid trusted restore URL")
+	}
+	if parsed.Scheme != "https" || restoreOrigin(parsed) != strings.ToLower(origin) {
+		return nil, fmt.Errorf("restore URL does not match the trusted HTTPS origin")
+	}
+	if !validTrustedRestorePath(parsed, pathPrefix) {
+		return nil, fmt.Errorf("restore URL is outside the trusted path")
+	}
+	query := parsed.Query()
+	if query.Get("customer_id") == "" || query.Get("expires") == "" || query.Get("signature") == "" {
+		return nil, fmt.Errorf("restore URL is missing its signed download capability")
+	}
+	allowed := make(map[string]net.IP, len(allowedAddresses))
+	for _, raw := range allowedAddresses {
+		ip := net.ParseIP(strings.TrimSpace(raw))
+		if ip == nil || !isRestrictedIP(ip) {
+			return nil, fmt.Errorf("trusted restore address %q is invalid", raw)
+		}
+		allowed[ip.String()] = ip
+	}
+	if len(allowed) == 0 {
+		return nil, fmt.Errorf("trusted restore origin has no pinned addresses")
+	}
+	var resolved []net.IP
+	if ip := net.ParseIP(parsed.Hostname()); ip != nil {
+		resolved = append(resolved, ip)
+	} else {
+		addrInfos, err := net.DefaultResolver.LookupNetIP(ctx, "ip", parsed.Hostname())
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve trusted restore host %q: %w", parsed.Hostname(), err)
+		}
+		for _, addr := range addrInfos {
+			resolved = append(resolved, net.IP(addr.AsSlice()))
+		}
+	}
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("trusted restore host %q has no addresses", parsed.Hostname())
+	}
+	for _, ip := range resolved {
+		if _, ok := allowed[ip.String()]; !ok {
+			return nil, fmt.Errorf("trusted restore host %q resolved to unapproved address %q", parsed.Hostname(), ip)
+		}
+	}
+	return resolved, nil
+}
+
 func isPrivateHost(host string) error {
 	_, err := resolveRestoreHost(context.Background(), host, "")
 	return err
 }
 
-func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP string) (*http.Client, error) {
+func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trustedSourceOrigin, trustedSourcePathPrefix string, trustedSourceIPs []string) (*http.Client, error) {
 	parsed, err := url.Parse(sourceURI)
 	if err != nil {
 		return nil, err
@@ -307,7 +370,15 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP string
 	if parsed.Scheme != "https" {
 		return nil, fmt.Errorf("restore uri must use https")
 	}
-	initial, err := resolveRestoreHost(ctx, parsed.Host, trustedSourceIP)
+	var initial []net.IP
+	if trustedSourceOrigin != "" || trustedSourcePathPrefix != "" || len(trustedSourceIPs) > 0 {
+		if trustedSourceOrigin == "" || trustedSourcePathPrefix == "" || len(trustedSourceIPs) == 0 {
+			return nil, fmt.Errorf("incomplete trusted restore source capability")
+		}
+		initial, err = resolveTrustedRestoreOrigin(ctx, parsed, trustedSourceOrigin, trustedSourcePathPrefix, trustedSourceIPs)
+	} else {
+		initial, err = resolveRestoreHost(ctx, parsed.Host, trustedSourceIP)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +388,13 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP string
 		if target.Scheme != "https" {
 			return fmt.Errorf("restore redirect must use https")
 		}
-		ips, err := resolveRestoreHost(ctx, target.Host, trustedSourceIP)
+		var ips []net.IP
+		var err error
+		if trustedSourceOrigin != "" {
+			ips, err = resolveTrustedRestoreOrigin(ctx, target, trustedSourceOrigin, trustedSourcePathPrefix, trustedSourceIPs)
+		} else {
+			ips, err = resolveRestoreHost(ctx, target.Host, trustedSourceIP)
+		}
 		if err != nil {
 			return err
 		}
@@ -356,7 +433,7 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP string
 	return client, nil
 }
 
-func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sourceURI, trustedSourceIP string) (string, error) {
+func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sourceURI string, restore admiral.RestoreInfo) (string, error) {
 	parsed, err := url.Parse(sourceURI)
 	if err != nil {
 		return "", fmt.Errorf("parse restore uri: %w", err)
@@ -364,7 +441,7 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 	if parsed.Scheme != "https" {
 		return "", fmt.Errorf("restore uri must use https")
 	}
-	client, err := newRestoreHTTPClient(ctx, sourceURI, trustedSourceIP)
+	client, err := newRestoreHTTPClient(ctx, sourceURI, restore.TrustedSourceIP, restore.TrustedSourceOrigin, restore.TrustedSourcePathPrefix, restore.TrustedSourceIPs)
 	if err != nil {
 		return "", fmt.Errorf("restore uri rejected: %w", err)
 	}
