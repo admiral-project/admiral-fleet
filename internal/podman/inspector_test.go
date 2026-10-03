@@ -398,6 +398,19 @@ func TestInspectorPodIsPaused(t *testing.T) {
 	}
 }
 
+func TestInspectorPodIsPausedReturnsFalseWhenPodDoesNotExist(t *testing.T) {
+	runner := &fakeRunner{err: errors.New("exit status 125: Error: no such pod admiral-demo")}
+	inspector := NewInspector(runner)
+
+	paused, err := inspector.PodIsPaused(context.Background(), "admiral-demo")
+	if err != nil {
+		t.Fatalf("pod absence should not block a normal start: %v", err)
+	}
+	if paused {
+		t.Fatal("expected absent pod to be treated as not paused")
+	}
+}
+
 func TestInspectorPauseUnpausePod(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)

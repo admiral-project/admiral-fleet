@@ -961,6 +961,49 @@ func TestSystemdPodmanExecutorResumeUsesSystemdStart(t *testing.T) {
 	}
 }
 
+func TestSystemdPodmanExecutorResumeStartsWhenPodDoesNotExist(t *testing.T) {
+	podmanRunner := &fakePodmanRunner{
+		overrides: map[string]fakeOverride{
+			"missing-pod-inspect": {
+				contains: "podman pod inspect admiral-demo001 --format {{.State}}",
+				err:      errors.New("exit status 125: Error: no such pod admiral-demo001"),
+			},
+		},
+	}
+	systemdRunner := &fakeSystemdRunner{}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+
+	res := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:      "task_resume_missing_pod",
+		OperationID: "op_resume_missing_pod",
+		NodeID:      "node_1",
+		Action:      admiral.ActionResumeApp,
+		InstanceID:  "demo001",
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "example.com/app:1"},
+		},
+	}, "node_1")
+
+	if !res.Success {
+		t.Fatalf("expected resume to start an instance with no pod, got %q", res.Error)
+	}
+	foundStart := false
+	for _, call := range systemdRunner.calls {
+		if strings.Contains(strings.Join(call, " "), "start admiral-demo001-pod.service") {
+			foundStart = true
+			break
+		}
+	}
+	if !foundStart {
+		t.Fatalf("expected normal systemd start path for absent pod, calls: %#v", systemdRunner.calls)
+	}
+	for _, call := range podmanRunner.calls {
+		if strings.Contains(strings.Join(call, " "), "podman pod unpause") {
+			t.Fatalf("must not unpause when no pod exists, calls: %#v", podmanRunner.calls)
+		}
+	}
+}
+
 func TestSystemdPodmanExecutorResumeUnpausesRestoredPod(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{
 		execSequenceContains: "podman pod inspect admiral-demo001 --format {{.State}}",
