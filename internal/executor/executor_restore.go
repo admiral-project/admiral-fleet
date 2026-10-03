@@ -364,7 +364,7 @@ func isPrivateHost(host string) error {
 	return err
 }
 
-func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trustedSourceOrigin, trustedSourcePathPrefix string, trustedSourceIPs []string, trustedCACertFile string) (*http.Client, error) {
+func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trustedSourceOrigin, trustedSourcePathPrefix string, trustedSourceIPs []string, trustedCACertPEM []byte) (*http.Client, error) {
 	parsed, err := url.Parse(sourceURI)
 	if err != nil {
 		return nil, err
@@ -386,7 +386,7 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trust
 	}
 	var rootCAs *x509.CertPool
 	if trustedSourceOrigin != "" {
-		if strings.TrimSpace(trustedCACertFile) == "" {
+		if len(bytes.TrimSpace(trustedCACertPEM)) == 0 {
 			return nil, fmt.Errorf("trusted Harbor restore requires a configured Admiral CA certificate")
 		}
 		rootCAs, err = x509.SystemCertPool()
@@ -396,12 +396,11 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trust
 		if rootCAs == nil {
 			return nil, fmt.Errorf("load system certificate roots for Harbor restore: system root pool is unavailable")
 		}
-		caPEM, readErr := os.ReadFile(trustedCACertFile)
-		if readErr != nil {
-			return nil, fmt.Errorf("read Admiral CA certificate %q for Harbor restore: %w", trustedCACertFile, readErr)
+		if len(trustedCACertPEM) == 0 {
+			return nil, fmt.Errorf("trusted Harbor restore requires a configured Admiral CA certificate")
 		}
-		if !rootCAs.AppendCertsFromPEM(caPEM) {
-			return nil, fmt.Errorf("Admiral CA certificate %q contains no valid certificates", trustedCACertFile)
+		if !rootCAs.AppendCertsFromPEM(trustedCACertPEM) {
+			return nil, fmt.Errorf("Admiral CA certificate contains no valid certificates")
 		}
 	}
 	var mu sync.RWMutex
@@ -464,7 +463,17 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 	if parsed.Scheme != "https" {
 		return "", fmt.Errorf("restore uri must use https")
 	}
-	client, err := newRestoreHTTPClient(ctx, sourceURI, restore.TrustedSourceIP, restore.TrustedSourceOrigin, restore.TrustedSourcePathPrefix, restore.TrustedSourceIPs, e.RestoreCACertFile)
+	caPEM := e.RestoreCACertPEM
+	if restore.TrustedSourceOrigin != "" && len(caPEM) == 0 {
+		if strings.TrimSpace(e.RestoreCACertFile) == "" {
+			return "", fmt.Errorf("restore uri rejected: trusted Harbor restore requires a configured Admiral CA certificate")
+		}
+		caPEM, err = os.ReadFile(e.RestoreCACertFile)
+		if err != nil {
+			return "", fmt.Errorf("restore uri rejected: read Admiral CA certificate %q for Harbor restore: %w", e.RestoreCACertFile, err)
+		}
+	}
+	client, err := newRestoreHTTPClient(ctx, sourceURI, restore.TrustedSourceIP, restore.TrustedSourceOrigin, restore.TrustedSourcePathPrefix, restore.TrustedSourceIPs, caPEM)
 	if err != nil {
 		return "", fmt.Errorf("restore uri rejected: %w", err)
 	}

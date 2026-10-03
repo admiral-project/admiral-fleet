@@ -27,7 +27,6 @@ func buildExecutor() *executor.SystemdPodmanExecutor {
 	mgr := systemd.NewManager(&systemd.UserRunner{})
 
 	exec := executor.NewSystemdPodmanWithFS(mgr, insp, "", dataDir, rootlessUser, osutil.RealFileSystem{}, osutil.RealUserLookup{})
-	exec.RestoreCACertFile = os.Getenv("ADMIRAL_API_CA_FILE")
 	exec.PodmanDirect = true
 	exec.RestoreContainersReady = true
 	return exec

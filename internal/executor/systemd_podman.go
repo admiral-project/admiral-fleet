@@ -30,6 +30,7 @@ type SystemdPodmanExecutor struct {
 	DataDir           string
 	RootlessUser      string // empty = rootful; set = rootless systemd --user target
 	RestoreCACertFile string
+	RestoreCACertPEM  []byte
 	portMu            sync.Mutex
 
 	// DelegateBackup and DelegateRestore run the data-plane backup/restore

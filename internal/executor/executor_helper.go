@@ -6,6 +6,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -23,6 +24,15 @@ const (
 	helperActionRestore = "restore"
 	defaultHelperBinary = "admiral-fleet-backup"
 )
+
+// HelperTaskPayload is the private stdin protocol between Fleet and its
+// rootless data helper. The Admiral CA is public certificate material and is
+// sent only for restore tasks carrying Admirald's trusted Harbor capability;
+// this avoids giving the workload user access to /etc/admiral/tls.
+type HelperTaskPayload struct {
+	Task             admiral.FleetTask `json:"task"`
+	RestoreCACertPEM []byte            `json:"restore_ca_cert_pem,omitempty"`
+}
 
 // chownForRootless hands a single path to the rootless user without following
 // symlinks. The storage trees handed over by the fleet are writable by the
@@ -101,10 +111,10 @@ func (e *SystemdPodmanExecutor) delegateDataTask(ctx context.Context, task admir
 		result.Error = err.Error()
 		return result
 	}
-	payload, err := json.Marshal(task)
+	payload, err := e.marshalHelperTaskPayload(task, action)
 	if err != nil {
 		result.Success = false
-		result.Error = fmt.Sprintf("serialize %s task for helper: %v", action, err)
+		result.Error = fmt.Sprintf("prepare %s task for helper: %v", action, err)
 		return result
 	}
 	out, err := e.runHelper(ctx, action, payload)
@@ -132,6 +142,24 @@ func (e *SystemdPodmanExecutor) delegateDataTask(ctx context.Context, task admir
 	result.Logs = helperResult.Logs
 	result.Metadata = helperResult.Metadata
 	return result
+}
+
+func (e *SystemdPodmanExecutor) marshalHelperTaskPayload(task admiral.FleetTask, action string) ([]byte, error) {
+	helperPayload := HelperTaskPayload{Task: task}
+	if action == helperActionRestore && task.Restore != nil && strings.TrimSpace(task.Restore.TrustedSourceOrigin) != "" {
+		if strings.TrimSpace(e.RestoreCACertFile) == "" {
+			return nil, fmt.Errorf("trusted Harbor restore requires a configured Admiral CA certificate")
+		}
+		caPEM, err := os.ReadFile(e.RestoreCACertFile)
+		if err != nil {
+			return nil, fmt.Errorf("read Admiral CA certificate %q for Harbor restore: %w", e.RestoreCACertFile, err)
+		}
+		if !x509.NewCertPool().AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("Admiral CA certificate %q contains no valid certificates", e.RestoreCACertFile)
+		}
+		helperPayload.RestoreCACertPEM = caPEM
+	}
+	return json.Marshal(helperPayload)
 }
 
 func (e *SystemdPodmanExecutor) runHelper(ctx context.Context, action string, payload []byte) ([]byte, error) {
@@ -174,9 +202,6 @@ func (e *SystemdPodmanExecutor) helperCommandArgs(rootlessUID, action string) ([
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(xdgRuntimeDir, "bus"),
 		"ADMIRAL_FLEET_DATA_DIR=" + e.DataDir,
 		"ADMIRAL_FLEET_ROOTLESS_USER=" + e.RootlessUser,
-	}
-	if strings.TrimSpace(e.RestoreCACertFile) != "" {
-		args = append(args, "ADMIRAL_API_CA_FILE="+e.RestoreCACertFile)
 	}
 	args = append(args, binary, action)
 	return args, nil

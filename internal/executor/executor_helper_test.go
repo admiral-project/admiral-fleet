@@ -4,12 +4,19 @@
 package executor
 
 import (
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
 type recordingFS struct {
@@ -185,7 +192,6 @@ func TestHelperCommandArgs(t *testing.T) {
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/991/bus",
 		"ADMIRAL_FLEET_DATA_DIR=/var/lib/admiral",
 		"ADMIRAL_FLEET_ROOTLESS_USER=admiral-apps",
-		"ADMIRAL_API_CA_FILE=/etc/admiral/tls/ca.pem",
 	}
 	got := args[:len(want)]
 	if !reflect.DeepEqual(got, want) {
@@ -206,6 +212,76 @@ func TestHelperCommandArgsRequiresAction(t *testing.T) {
 	exec := &SystemdPodmanExecutor{RootlessUser: "admiral-apps"}
 	if _, err := exec.helperCommandArgs("991", ""); err == nil {
 		t.Fatal("expected error for empty action")
+	}
+}
+
+func TestHelperTaskPayloadPassesAdmiralCAOnlyForTrustedHarborRestore(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	caPath := filepath.Join(t.TempDir(), "admiral-ca.pem")
+	if err := os.WriteFile(caPath, caPEM, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !x509.NewCertPool().AppendCertsFromPEM(caPEM) {
+		t.Fatal("test certificate is not valid PEM")
+	}
+
+	task := admiral.FleetTask{
+		TaskID:  "task_test",
+		Restore: &admiral.RestoreInfo{TrustedSourceOrigin: "https://localhost:5001"},
+	}
+	exec := &SystemdPodmanExecutor{RestoreCACertFile: caPath}
+
+	encoded, err := exec.marshalHelperTaskPayload(task, helperActionRestore)
+	if err != nil {
+		t.Fatalf("marshal trusted Harbor restore payload: %v", err)
+	}
+	var decoded HelperTaskPayload
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal helper payload: %v", err)
+	}
+	if decoded.Task.TaskID != task.TaskID {
+		t.Fatalf("task id changed in helper payload: %q", decoded.Task.TaskID)
+	}
+	if string(decoded.RestoreCACertPEM) != string(caPEM) {
+		t.Fatal("helper payload did not carry the validated Admiral CA PEM")
+	}
+
+	for _, action := range []string{helperActionBackup, helperActionRestore} {
+		untrusted := task
+		untrusted.Restore = &admiral.RestoreInfo{}
+		encoded, err := exec.marshalHelperTaskPayload(untrusted, action)
+		if err != nil {
+			t.Fatalf("marshal %s payload without Harbor capability: %v", action, err)
+		}
+		decoded = HelperTaskPayload{}
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatalf("unmarshal %s payload: %v", action, err)
+		}
+		if len(decoded.RestoreCACertPEM) != 0 {
+			t.Fatalf("%s payload unexpectedly contains the Admiral CA", action)
+		}
+	}
+}
+
+func TestHelperTaskPayloadRequiresReadableValidCAForTrustedRestore(t *testing.T) {
+	task := admiral.FleetTask{
+		TaskID:  "task_test",
+		Restore: &admiral.RestoreInfo{TrustedSourceOrigin: "https://localhost:5001"},
+	}
+	if _, err := (&SystemdPodmanExecutor{}).marshalHelperTaskPayload(task, helperActionRestore); err == nil || !strings.Contains(err.Error(), "requires a configured Admiral CA") {
+		t.Fatalf("expected missing CA to fail clearly, got %v", err)
+	}
+	if _, err := (&SystemdPodmanExecutor{RestoreCACertFile: filepath.Join(t.TempDir(), "missing.pem")}).marshalHelperTaskPayload(task, helperActionRestore); err == nil || !strings.Contains(err.Error(), "read Admiral CA certificate") {
+		t.Fatalf("expected unreadable CA to fail clearly, got %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "invalid.pem")
+	if err := os.WriteFile(path, []byte("not a certificate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&SystemdPodmanExecutor{RestoreCACertFile: path}).marshalHelperTaskPayload(task, helperActionRestore); err == nil || !strings.Contains(err.Error(), "contains no valid certificates") {
+		t.Fatalf("expected invalid CA to fail closed, got %v", err)
 	}
 }
 

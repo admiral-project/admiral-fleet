@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/executor"
-	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
 func main() {
@@ -38,17 +37,19 @@ func main() {
 		slog.Error("read task payload", "error", err)
 		os.Exit(1)
 	}
-	var task admiral.FleetTask
-	if err := json.Unmarshal(payload, &task); err != nil {
-		slog.Error("parse task payload", "error", err)
+	var helperPayload executor.HelperTaskPayload
+	if err := json.Unmarshal(payload, &helperPayload); err != nil {
+		slog.Error("parse helper task payload", "error", err)
 		os.Exit(1)
 	}
+	task := helperPayload.Task
 	if strings.TrimSpace(task.TaskID) == "" {
 		slog.Error("task payload missing task_id")
 		os.Exit(1)
 	}
 
 	exec := buildExecutor()
+	exec.RestoreCACertPEM = helperPayload.RestoreCACertPEM
 	result := exec.Execute(context.Background(), task, task.NodeID)
 
 	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {

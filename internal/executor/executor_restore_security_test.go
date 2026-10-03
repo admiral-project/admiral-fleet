@@ -15,8 +15,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,11 +30,7 @@ func TestRestoreHTTPClientUsesAdmiralCAOnlyForTrustedHarborOrigin(t *testing.T) 
 	}))
 	defer server.Close()
 
-	certPath := filepath.Join(t.TempDir(), "admiral-ca.pem")
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
-	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
-		t.Fatal(err)
-	}
 	parsed, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +39,7 @@ func TestRestoreHTTPClientUsesAdmiralCAOnlyForTrustedHarborOrigin(t *testing.T) 
 	trustedURL := server.URL + path + "?customer_id=cus_123&expires=2000000000&signature=test-signature"
 
 	t.Run("trusted Harbor capability accepts Admiral CA", func(t *testing.T) {
-		client, err := newRestoreHTTPClient(context.Background(), trustedURL, "", server.URL, "/api/v1/backups/uploads/", allowedIPs, certPath)
+		client, err := newRestoreHTTPClient(context.Background(), trustedURL, "", server.URL, "/api/v1/backups/uploads/", allowedIPs, certPEM)
 		if err != nil {
 			t.Fatalf("build trusted Harbor restore client: %v", err)
 		}
@@ -60,14 +54,14 @@ func TestRestoreHTTPClientUsesAdmiralCAOnlyForTrustedHarborOrigin(t *testing.T) 
 	})
 
 	t.Run("trusted Harbor capability requires a configured CA", func(t *testing.T) {
-		_, err := newRestoreHTTPClient(context.Background(), trustedURL, "", server.URL, "/api/v1/backups/uploads/", allowedIPs, "")
+		_, err := newRestoreHTTPClient(context.Background(), trustedURL, "", server.URL, "/api/v1/backups/uploads/", allowedIPs, nil)
 		if err == nil || !strings.Contains(err.Error(), "requires a configured Admiral CA") {
 			t.Fatalf("expected missing Admiral CA to fail closed, got %v", err)
 		}
 	})
 
 	t.Run("unrelated restore cannot use private Admiral CA", func(t *testing.T) {
-		_, err := newRestoreHTTPClient(context.Background(), trustedURL, "", "", "", nil, certPath)
+		_, err := newRestoreHTTPClient(context.Background(), trustedURL, "", "", "", nil, certPEM)
 		if err == nil {
 			t.Fatal("expected private restore URL without Harbor capability to be rejected")
 		}
@@ -95,11 +89,7 @@ func TestRestoreHTTPClientUsesAdmiralCAOnlyForTrustedHarborOrigin(t *testing.T) 
 			t.Fatal(err)
 		}
 		otherCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-		otherCertPath := filepath.Join(t.TempDir(), "unrelated-ca.pem")
-		if err := os.WriteFile(otherCertPath, otherCertPEM, 0600); err != nil {
-			t.Fatal(err)
-		}
-		client, err := newRestoreHTTPClient(context.Background(), trustedURL, "", server.URL, "/api/v1/backups/uploads/", allowedIPs, otherCertPath)
+		client, err := newRestoreHTTPClient(context.Background(), trustedURL, "", server.URL, "/api/v1/backups/uploads/", allowedIPs, otherCertPEM)
 		if err != nil {
 			t.Fatalf("build client with unrelated CA: %v", err)
 		}
