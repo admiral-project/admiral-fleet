@@ -918,7 +918,77 @@ func TestSystemdPodmanExecutorResumeUsesSystemdStart(t *testing.T) {
 		}
 	}
 	if foundPodmanUnpause {
-		t.Fatal("resume must NOT call podman pod unpause")
+		t.Fatal("resume must not unpause a pod that is already running")
+	}
+}
+
+func TestSystemdPodmanExecutorResumeUnpausesRestoredPod(t *testing.T) {
+	podmanRunner := &fakePodmanRunner{
+		execSequenceContains: "podman pod inspect admiral-demo001 --format {{.State}}",
+		execSequence: []fakePodmanResponse{
+			{output: []byte("Paused")},
+			{output: []byte("Running")},
+		},
+	}
+	systemdRunner := &fakeSystemdRunner{}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+
+	res := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:      "task_resume_paused_1",
+		OperationID: "op_resume_paused_1",
+		NodeID:      "node_1",
+		Action:      admiral.ActionResumeApp,
+		InstanceID:  "demo001",
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "example.com/app:1"},
+		},
+	}, "node_1")
+
+	if !res.Success {
+		t.Fatalf("expected resume to unpause and start pod, got %q", res.Error)
+	}
+	inspectIndex, unpauseIndex := -1, -1
+	for i, call := range podmanRunner.calls {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "podman pod inspect admiral-demo001 --format {{.State}}") && inspectIndex == -1 {
+			inspectIndex = i
+		}
+		if strings.Contains(joined, "podman pod unpause admiral-demo001") {
+			unpauseIndex = i
+		}
+	}
+	if inspectIndex == -1 || unpauseIndex <= inspectIndex {
+		t.Fatalf("expected pause inspection followed by pod unpause, calls: %#v", podmanRunner.calls)
+	}
+}
+
+func TestSystemdPodmanExecutorResumeFailsWhenUnpauseFails(t *testing.T) {
+	podmanRunner := &fakePodmanRunner{
+		execSequenceContains: "podman pod inspect admiral-demo001 --format {{.State}}",
+		execSequence:         []fakePodmanResponse{{output: []byte("Paused")}},
+		overrides: map[string]fakeOverride{
+			"unpause": {contains: "podman pod unpause admiral-demo001", err: errors.New("permission denied")},
+		},
+	}
+	systemdRunner := &fakeSystemdRunner{}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+
+	res := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:      "task_resume_paused_error",
+		OperationID: "op_resume_paused_error",
+		NodeID:      "node_1",
+		Action:      admiral.ActionResumeApp,
+		InstanceID:  "demo001",
+		Services: []admiral.ServiceInfo{
+			{Name: "app", Image: "example.com/app:1"},
+		},
+	}, "node_1")
+
+	if res.Success || !strings.Contains(res.Error, "unpause pod before resume") {
+		t.Fatalf("expected unpause failure to fail resume, got success=%t error=%q", res.Success, res.Error)
+	}
+	if len(systemdRunner.calls) != 0 {
+		t.Fatalf("expected systemd start not to run after unpause failure, calls: %#v", systemdRunner.calls)
 	}
 }
 

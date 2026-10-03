@@ -11,6 +11,33 @@ import (
 )
 
 func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult) admiral.TaskResult {
+	if task.Action == admiral.ActionResumeApp {
+		paused, err := e.podman().PodIsPaused(ctx, podName(task.InstanceID))
+		if err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("inspect pod pause state before resume for instance %q: %v", task.InstanceID, err)
+			return result
+		}
+		if paused {
+			if err := e.podman().PodUnpause(ctx, podName(task.InstanceID)); err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("unpause pod before resume for instance %q: %v", task.InstanceID, err)
+				return result
+			}
+			stillPaused, err := e.podman().PodIsPaused(ctx, podName(task.InstanceID))
+			if err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("verify pod pause state after resume for instance %q: %v", task.InstanceID, err)
+				return result
+			}
+			if stillPaused {
+				result.Success = false
+				result.Error = fmt.Sprintf("pod for instance %q remains paused after unpause", task.InstanceID)
+				return result
+			}
+		}
+	}
+
 	ports := e.loadHostPorts(e.DataDir, task.InstanceID)
 	r := e.renderer()
 	r.HostPorts = ports
