@@ -63,6 +63,13 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 			return fmt.Errorf("render quadlet: service %q requires an allocated host port", svc.Name)
 		}
 	}
+	quadletInfo, err := os.Stat(r.QuadletDir)
+	if err != nil {
+		return fmt.Errorf("render quadlet: inspect pre-provisioned directory %q: %w", r.QuadletDir, err)
+	}
+	if !quadletInfo.IsDir() {
+		return fmt.Errorf("render quadlet: configured quadlet path %q is not a directory", r.QuadletDir)
+	}
 	instanceDir := filepath.Join(r.DataDir, "instances", task.InstanceID)
 	envDir := filepath.Join(instanceDir, "env")
 	if err := os.MkdirAll(envDir, 0700); err != nil {
@@ -71,13 +78,6 @@ func (r *Renderer) Render(task admiral.FleetTask) error {
 	if err := os.MkdirAll(filepath.Join(instanceDir, "data"), 0750); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
-	if err := os.MkdirAll(r.QuadletDir, 0750); err != nil {
-		return fmt.Errorf("create quadlet dir: %w", err)
-	}
-	if err := os.Chmod(r.QuadletDir, 0755); err != nil { // #nosec G302 -- Quadlet directory needs to be accessible by the rootless user
-		return fmt.Errorf("set quadlet dir mode: %w", err)
-	}
-
 	if err := writeFile(filepath.Join(r.QuadletDir, PodFileName(task.InstanceID)), r.renderPod(task), 0644); err != nil {
 		return err
 	}

@@ -350,7 +350,7 @@ func TestRendererRendersERPNextFrontendWithSitesAndLogs(t *testing.T) {
 	}
 }
 
-func TestRendererMakesQuadletDirTraversableForRootlessUser(t *testing.T) {
+func TestRendererRequiresPreprovisionedQuadletDir(t *testing.T) {
 	parent := t.TempDir()
 	quadletDir := filepath.Join(parent, "admiral")
 	dataDir := t.TempDir()
@@ -364,16 +364,41 @@ func TestRendererMakesQuadletDirTraversableForRootlessUser(t *testing.T) {
 		},
 	}
 
+	err := renderer.Render(task)
+	if err == nil || !strings.Contains(err.Error(), "inspect pre-provisioned directory") {
+		t.Fatalf("expected missing package-managed directory error, got %v", err)
+	}
+	if _, err := os.Stat(quadletDir); !os.IsNotExist(err) {
+		t.Fatalf("renderer created the package-managed directory, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "instances", task.InstanceID)); !os.IsNotExist(err) {
+		t.Fatalf("renderer created instance data before checking the Quadlet directory, stat error = %v", err)
+	}
+}
+
+func TestRendererDoesNotChangePreprovisionedQuadletDirMode(t *testing.T) {
+	parent := t.TempDir()
+	quadletDir := filepath.Join(parent, "admiral")
+	if err := os.Mkdir(quadletDir, 0700); err != nil {
+		t.Fatalf("create test Quadlet directory: %v", err)
+	}
+	renderer := NewRenderer(quadletDir, t.TempDir())
+
+	task := admiral.FleetTask{
+		InstanceID: "demo003",
+		Tier:       admiral.TierInfo{CPU: 1},
+		Services:   []admiral.ServiceInfo{{Name: "app", Image: "docker.io/traefik/whoami:v1.10"}},
+	}
 	if err := renderer.Render(task); err != nil {
 		t.Fatalf("render quadlet: %v", err)
 	}
 
 	info, err := os.Stat(quadletDir)
 	if err != nil {
-		t.Fatalf("stat quadlet dir: %v", err)
+		t.Fatalf("stat Quadlet directory: %v", err)
 	}
-	if info.Mode().Perm() != 0755 {
-		t.Fatalf("expected quadlet dir mode 0755, got %o", info.Mode().Perm())
+	if info.Mode().Perm() != 0700 {
+		t.Fatalf("renderer changed the package-managed directory mode: got %o, want 700", info.Mode().Perm())
 	}
 }
 

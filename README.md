@@ -92,6 +92,10 @@ Generated files include:
 - `admiral-<instance>-<service>.container`: Defines each service container, linked to the pod.
 - `admiral-<instance>-<volume>.volume`: Defines named volumes for persistence.
 
+The `admiral-common` RPM creates the default per-UID Quadlet directory with
+mode `0755`. Fleet writes Quadlet files there and fails clearly if the
+package-managed directory is missing; it does not create or chmod that path.
+
 ### Permissions & Capabilities
 
 To maintain rootless integrity, the following permissions are enforced:
