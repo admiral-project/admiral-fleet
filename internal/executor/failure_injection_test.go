@@ -27,7 +27,7 @@ func TestSystemdPodmanExecutorFailureInjection(t *testing.T) {
 	manager := systemd.NewManager(runner)
 	inspector := podman.NewInspector(runner)
 
-	exec := NewSystemdPodmanWithFS(manager, inspector, "/tmp/quadlet", "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(manager, inspector, testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
 
 	task := admiral.FleetTask{
 		TaskID:      "task_fail",

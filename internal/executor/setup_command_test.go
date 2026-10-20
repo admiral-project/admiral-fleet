@@ -174,7 +174,7 @@ func TestTaskHasSetup(t *testing.T) {
 // created and detected correctly.
 func TestSetupMarkerRoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(nil), nil, "/tmp/quadlet", tmpDir, "", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(nil), nil, testPackageManagedQuadletDir(t), tmpDir, "", fakeFS{}, fakeUserLookup{})
 
 	if exec.setupMarkerExists("inst_001") {
 		t.Fatal("expected marker to not exist initially")
@@ -193,7 +193,7 @@ func TestSetupMarkerRoundTrip(t *testing.T) {
 // a fresh data directory (e.g. after a cross-node migration).
 func TestSetupMarkerAbsentOnFreshNode(t *testing.T) {
 	tmpDir := t.TempDir()
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(nil), nil, "/tmp/quadlet", tmpDir, "", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(nil), nil, testPackageManagedQuadletDir(t), tmpDir, "", fakeFS{}, fakeUserLookup{})
 	if exec.setupMarkerExists("never_seen") {
 		t.Fatal("expected marker to not exist on fresh data dir")
 	}
