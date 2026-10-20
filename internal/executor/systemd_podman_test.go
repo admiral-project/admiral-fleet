@@ -439,6 +439,47 @@ func TestSystemdPodmanExecutorBackupUsesPodInfraContainer(t *testing.T) {
 	}
 }
 
+func TestSystemdPodmanExecutorVolumeBackupArtifactIsPrivate(t *testing.T) {
+	dataDir := t.TempDir()
+	mountpoint := filepath.Join(t.TempDir(), "volume")
+	if err := os.MkdirAll(mountpoint, 0700); err != nil {
+		t.Fatalf("create volume mountpoint: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mountpoint, "marker.txt"), []byte("backup marker"), 0600); err != nil {
+		t.Fatalf("create volume marker: %v", err)
+	}
+
+	podmanRunner := &fakePodmanRunner{overrides: map[string]fakeOverride{
+		"volume inspect": {
+			contains: "podman volume inspect admiral-demo001-db",
+			output:   []byte(fmt.Sprintf(`[{"Name":"admiral-demo001-db","Mountpoint":%q}]`, mountpoint)),
+		},
+	}}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(&fakeSystemdRunner{}), podman.NewInspector(podmanRunner), "/tmp/quadlet", dataDir, testRootlessUser(t), fakeFS{}, fakeUserLookup{})
+
+	result := exec.backupVolumes(context.Background(), admiral.FleetTask{
+		TaskID:      "task_volume_backup",
+		OperationID: "op_volume_backup",
+		InstanceID:  "demo001",
+		Services: []admiral.ServiceInfo{{
+			Name:   "db",
+			Volume: "db_data",
+		}},
+	}, admiral.TaskResult{})
+	if !result.Success {
+		t.Fatalf("expected volume backup to succeed, got %q", result.Error)
+	}
+
+	artifactPath := filepath.Join(dataDir, "backups", "demo001", "volumes-op_volume_backup.tar.gz")
+	info, err := os.Stat(artifactPath)
+	if err != nil {
+		t.Fatalf("stat volume backup artifact: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("volume backup artifact mode = %#o, want 0600", got)
+	}
+}
+
 func TestSystemdPodmanExecutorPostgresBackupWaitsForReadiness(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{
 		execSequenceContains: "pg_isready",

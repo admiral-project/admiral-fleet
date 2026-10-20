@@ -153,7 +153,7 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 	}
 
 	path := filepath.Join(dir, fmt.Sprintf("volumes-%s.tar.gz", task.OperationID))
-	f, err := e.FS.Create(path)
+	f, err := e.FS.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("create backup file: %v", err)
