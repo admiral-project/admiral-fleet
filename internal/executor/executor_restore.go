@@ -206,6 +206,9 @@ func (e *SystemdPodmanExecutor) resolveLocalBackupPath(key string) (string, erro
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q escapes backup root %q", candidate, cleanRoot)
 	}
+	if err := e.validatePackageManagedDir(cleanRoot, 0750); err != nil {
+		return "", err
+	}
 	return candidate, nil
 }
 
@@ -221,6 +224,9 @@ func (e *SystemdPodmanExecutor) downloadS3Artifact(ctx context.Context, task adm
 	base := e.DataDir
 	if strings.TrimSpace(base) == "" {
 		base = "/var/lib/admiral"
+	}
+	if err := e.validatePackageManagedDir(filepath.Join(base, "restore"), 0750); err != nil {
+		return "", err
 	}
 	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
 	if err := e.FS.MkdirAll(dir, 0700); err != nil {
@@ -497,6 +503,9 @@ func (e *SystemdPodmanExecutor) downloadRestoreArtifact(ctx context.Context, sou
 	base := e.DataDir
 	if strings.TrimSpace(base) == "" {
 		base = "/var/lib/admiral"
+	}
+	if err := e.validatePackageManagedDir(filepath.Join(base, "restore"), 0750); err != nil {
+		return "", err
 	}
 	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
 	if err := e.FS.MkdirAll(dir, 0700); err != nil {
@@ -808,6 +817,9 @@ func (e *SystemdPodmanExecutor) expandGzipArtifactFromFile(path string) (string,
 	base := e.DataDir
 	if strings.TrimSpace(base) == "" {
 		base = "/var/lib/admiral"
+	}
+	if err := e.validatePackageManagedDir(filepath.Join(base, "restore"), 0750); err != nil {
+		return "", err
 	}
 	dir := filepath.Join(base, "restore", fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
 	if err := e.FS.MkdirAll(dir, 0750); err != nil {

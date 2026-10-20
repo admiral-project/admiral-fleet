@@ -27,6 +27,11 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Error = err.Error()
 		return result
 	}
+	if err := e.validateInstanceDataRoots(); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
 
 	// Idempotency check: if pod already exists, treat as already provisioned.
 	podName := podName(task.InstanceID)

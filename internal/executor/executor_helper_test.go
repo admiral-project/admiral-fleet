@@ -27,17 +27,20 @@ type recordingFS struct {
 	lchowns map[string][2]int
 	// tree holds child paths returned by Walk for recursive chown checks.
 	tree []string
+	// statModes represents package-managed directory modes returned by Stat.
+	statModes map[string]os.FileMode
 	// symlinks holds tree paths reported to Walk as symlinks.
 	symlinks map[string]bool
 }
 
 func newRecordingFS() *recordingFS {
 	return &recordingFS{
-		mkdirs:   map[string]os.FileMode{},
-		chowns:   map[string][2]int{},
-		chmods:   map[string]os.FileMode{},
-		lchowns:  map[string][2]int{},
-		symlinks: map[string]bool{},
+		mkdirs:    map[string]os.FileMode{},
+		chowns:    map[string][2]int{},
+		chmods:    map[string]os.FileMode{},
+		lchowns:   map[string][2]int{},
+		symlinks:  map[string]bool{},
+		statModes: map[string]os.FileMode{},
 	}
 }
 
@@ -54,10 +57,16 @@ func (f *recordingFS) Lchown(name string, uid, gid int) error {
 	f.lchowns[name] = [2]int{uid, gid}
 	return nil
 }
-func (f *recordingFS) RemoveAll(string) error           { return nil }
-func (f *recordingFS) Remove(string) error              { return nil }
-func (f *recordingFS) Stat(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
-func (f *recordingFS) Create(string) (*os.File, error)  { return nil, os.ErrInvalid }
+func (f *recordingFS) RemoveAll(string) error { return nil }
+func (f *recordingFS) Remove(string) error    { return nil }
+func (f *recordingFS) Stat(path string) (os.FileInfo, error) {
+	mode, ok := f.statModes[path]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return fakeFileInfo{name: path, mode: mode}, nil
+}
+func (f *recordingFS) Create(string) (*os.File, error) { return nil, os.ErrInvalid }
 func (f *recordingFS) OpenFile(string, int, os.FileMode) (*os.File, error) {
 	return nil, os.ErrInvalid
 }
@@ -68,9 +77,14 @@ func (f *recordingFS) ReadFile(string) ([]byte, error) {
 func (f *recordingFS) WriteFile(string, []byte, os.FileMode) error { return os.ErrInvalid }
 func (f *recordingFS) Walk(root string, walkFn filepath.WalkFunc) error {
 	for _, p := range f.tree {
+		if p != root && !strings.HasPrefix(p, root+string(filepath.Separator)) {
+			continue
+		}
 		mode := os.FileMode(0)
 		if f.symlinks[p] {
 			mode = os.ModeSymlink
+		} else if statMode, ok := f.statModes[p]; ok {
+			mode = statMode
 		}
 		if err := walkFn(p, fakeFileInfo{name: p, mode: mode}, nil); err != nil {
 			return err
@@ -97,9 +111,20 @@ func (f fakeFileInfo) Sys() interface{} { return nil }
 
 func TestPrepareStorageRootsChownsToRootlessUser(t *testing.T) {
 	fs := newRecordingFS()
+	for path, mode := range map[string]os.FileMode{
+		"/var/lib/admiral/backups": 0750,
+		"/var/lib/admiral/restore": 0750,
+		"/var/lib/admiral/tmp":     0700,
+	} {
+		fs.statModes[path] = os.ModeDir | mode
+		fs.tree = append(fs.tree, path)
+	}
 	fs.tree = []string{
+		"/var/lib/admiral/backups",
 		"/var/lib/admiral/backups/inst_old/old-mariadb-db.tar.gz",
+		"/var/lib/admiral/restore",
 		"/var/lib/admiral/restore/artifact.bin",
+		"/var/lib/admiral/tmp",
 	}
 	exec := &SystemdPodmanExecutor{
 		FS:           fs,
@@ -115,20 +140,23 @@ func TestPrepareStorageRootsChownsToRootlessUser(t *testing.T) {
 		"/var/lib/admiral/restore",
 		"/var/lib/admiral/tmp",
 	} {
-		if _, ok := fs.lchowns[root]; !ok {
-			t.Fatalf("expected %q to be handed to rootless via lchown", root)
+		if _, ok := fs.lchowns[root]; ok {
+			t.Fatalf("package-managed root %q must not be chowned by Fleet", root)
 		}
-		if fs.lchowns[root] != [2]int{1000, 1000} {
-			t.Fatalf("unexpected lchown for %q: %v", root, fs.lchowns[root])
+		if _, ok := fs.chmods[root]; ok {
+			t.Fatalf("package-managed root %q must not be chmodded by Fleet", root)
 		}
-		if fs.chmods[root] != 0751 {
-			t.Fatalf("unexpected chmod for %q: %v", root, fs.chmods[root])
+		if _, ok := fs.mkdirs[root]; ok {
+			t.Fatalf("package-managed root %q must not be created by Fleet", root)
 		}
 		if _, followed := fs.chowns[root]; followed {
 			t.Fatalf("storage root %q must not be chowned through a dereferencing path", root)
 		}
 	}
-	for _, artifact := range fs.tree {
+	for _, artifact := range []string{
+		"/var/lib/admiral/backups/inst_old/old-mariadb-db.tar.gz",
+		"/var/lib/admiral/restore/artifact.bin",
+	} {
 		if fs.lchowns[artifact] != [2]int{1000, 1000} {
 			t.Fatalf("expected pre-existing artifact %q to be handed to rootless via lchown, got %v", artifact, fs.lchowns[artifact])
 		}
@@ -137,9 +165,19 @@ func TestPrepareStorageRootsChownsToRootlessUser(t *testing.T) {
 
 func TestPrepareStorageRootsSkipsSymlinks(t *testing.T) {
 	fs := newRecordingFS()
+	for path, mode := range map[string]os.FileMode{
+		"/var/lib/admiral/backups": 0750,
+		"/var/lib/admiral/restore": 0750,
+		"/var/lib/admiral/tmp":     0700,
+	} {
+		fs.statModes[path] = os.ModeDir | mode
+	}
 	fs.tree = []string{
+		"/var/lib/admiral/backups",
 		"/var/lib/admiral/backups/inst_old/legit-db.tar.gz",
 		"/var/lib/admiral/backups/inst_old/planted-link",
+		"/var/lib/admiral/restore",
+		"/var/lib/admiral/tmp",
 	}
 	fs.symlinks["/var/lib/admiral/backups/inst_old/planted-link"] = true
 	exec := &SystemdPodmanExecutor{
@@ -159,6 +197,55 @@ func TestPrepareStorageRootsSkipsSymlinks(t *testing.T) {
 	}
 	if _, chowned := fs.chowns["/var/lib/admiral/backups/inst_old/planted-link"]; chowned {
 		t.Fatal("symlink must never be dereferenced by Chown")
+	}
+}
+
+func TestPrepareStorageRootsRejectsMissingPackageManagedRoot(t *testing.T) {
+	fs := newRecordingFS()
+	exec := &SystemdPodmanExecutor{
+		FS:           fs,
+		UserLookup:   fakeUserLookup{},
+		DataDir:      "/var/lib/admiral",
+		RootlessUser: "admiral-apps",
+	}
+	if err := exec.prepareStorageRoots(); err == nil || !strings.Contains(err.Error(), "admiral-common") {
+		t.Fatalf("expected actionable missing-package-directory error, got %v", err)
+	}
+	if len(fs.mkdirs) != 0 || len(fs.chmods) != 0 || len(fs.lchowns) != 0 {
+		t.Fatalf("Fleet must not create or change package-managed roots: mkdirs=%v chmods=%v lchowns=%v", fs.mkdirs, fs.chmods, fs.lchowns)
+	}
+}
+
+func TestChownInstanceDataDoesNotChangePackageManagedRoots(t *testing.T) {
+	fs := newRecordingFS()
+	dataDir := "/var/lib/admiral"
+	instancesDir := filepath.Join(dataDir, "instances")
+	instanceDir := filepath.Join(instancesDir, "inst_test")
+	envDir := filepath.Join(instanceDir, "env")
+	fs.statModes[dataDir] = os.ModeDir | 0751
+	fs.statModes[instancesDir] = os.ModeDir | 0751
+	fs.statModes[instanceDir] = os.ModeDir | 0751
+	fs.statModes[envDir] = os.ModeDir | 0751
+	fs.tree = []string{instanceDir, envDir}
+	exec := &SystemdPodmanExecutor{
+		FS:           fs,
+		UserLookup:   fakeUserLookup{},
+		DataDir:      dataDir,
+		RootlessUser: "admiral-apps",
+	}
+	if err := exec.chownInstanceData("inst_test"); err != nil {
+		t.Fatalf("chownInstanceData: %v", err)
+	}
+	for _, root := range []string{dataDir, instancesDir} {
+		if _, ok := fs.chmods[root]; ok {
+			t.Fatalf("Fleet changed package-managed directory mode %q", root)
+		}
+		if _, ok := fs.mkdirs[root]; ok {
+			t.Fatalf("Fleet created package-managed directory %q", root)
+		}
+	}
+	if fs.chmods[instanceDir] != 0751 || fs.chmods[envDir] != 0751 {
+		t.Fatalf("expected only dynamic instance directories to receive rootless traversal mode, got %v", fs.chmods)
 	}
 }
 

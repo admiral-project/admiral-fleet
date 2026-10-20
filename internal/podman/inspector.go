@@ -374,9 +374,6 @@ func (i *Inspector) createEnvFile() (*os.File, error) {
 	if tempDir == "" {
 		tempDir = os.TempDir()
 	}
-	if err := os.MkdirAll(tempDir, 0711); err != nil {
-		return nil, fmt.Errorf("create shared temp dir: %w", err)
-	}
 	f, err := os.CreateTemp(tempDir, "admiral-env-")
 	if err != nil {
 		return nil, err

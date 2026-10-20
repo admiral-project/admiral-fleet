@@ -32,8 +32,12 @@ func newOutbox(dir string) *outbox {
 }
 
 func (o *outbox) enqueue(result admiral.TaskResult) error {
-	if err := os.MkdirAll(o.dir, 0700); err != nil {
-		return fmt.Errorf("create outbox dir: %w", err)
+	info, err := os.Stat(o.dir)
+	if err != nil {
+		return fmt.Errorf("access package-managed outbox directory %q: %w", o.dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("package-managed outbox path %q is not a directory", o.dir)
 	}
 	name := fmt.Sprintf("%d-%s-%s.json", time.Now().UTC().UnixNano(), result.OperationID, result.TaskID)
 	name = filepath.Clean(name)

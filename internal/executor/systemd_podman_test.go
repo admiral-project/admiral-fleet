@@ -179,6 +179,32 @@ func testPackageManagedQuadletDir(t *testing.T) string {
 	return dir
 }
 
+func testPackageManagedDataDir(t *testing.T) string {
+	t.Helper()
+	dataDir := t.TempDir()
+	for _, entry := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{path: dataDir, mode: 0751},
+		{path: filepath.Join(dataDir, "instances"), mode: 0751},
+		{path: filepath.Join(dataDir, "backups"), mode: 0750},
+		{path: filepath.Join(dataDir, "restore"), mode: 0750},
+		{path: filepath.Join(dataDir, "tmp"), mode: 0700},
+		{path: filepath.Join(dataDir, "outbox"), mode: 0700},
+	} {
+		if entry.path != dataDir {
+			if err := os.Mkdir(entry.path, entry.mode); err != nil {
+				t.Fatalf("create package-managed test directory %q: %v", entry.path, err)
+			}
+		}
+		if err := os.Chmod(entry.path, entry.mode); err != nil {
+			t.Fatalf("chmod package-managed test directory %q: %v", entry.path, err)
+		}
+	}
+	return dataDir
+}
+
 func testRootlessUser(t *testing.T) string {
 	t.Helper()
 	current, err := user.Current()
@@ -188,11 +214,22 @@ func testRootlessUser(t *testing.T) string {
 	return current.Username
 }
 
+func TestNewSystemdPodmanWithFSLeavesPackageManagedDataRootsAlone(t *testing.T) {
+	fs := newRecordingFS()
+	_ = NewSystemdPodmanWithFS(nil, nil, "/etc/containers/systemd/admiral", "/var/lib/admiral", "admiral-apps", fs, fakeUserLookup{})
+	if len(fs.mkdirs) != 0 {
+		t.Fatalf("constructor must not create package-managed directories, got %v", fs.mkdirs)
+	}
+	if len(fs.chmods) != 0 {
+		t.Fatalf("constructor must not change package-managed directory modes, got %v", fs.chmods)
+	}
+}
+
 func TestSystemdPodmanExecutorStartsAppUnit(t *testing.T) {
 	runner := &fakeSystemdRunner{}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodmanWithFS(manager, nil, testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(manager, nil, testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
@@ -228,7 +265,7 @@ func TestSystemdPodmanExecutorStartsPodUnitWithLimits(t *testing.T) {
 	runner := &fakeSystemdRunner{}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodmanWithFS(manager, nil, testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(manager, nil, testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_2",
@@ -268,7 +305,7 @@ func TestSystemdPodmanExecutorStartsPodUnitWithLimits(t *testing.T) {
 func TestSystemdPodmanExecutorPullsImagesAsPartOfImageVerification(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:       "task_pull_1",
@@ -311,7 +348,7 @@ func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 	runner := &fakeSystemdRunner{err: errors.New("unit not found")}
 	manager := systemd.NewManager(runner)
 	manager.Timeout = time.Second
-	exec := NewSystemdPodmanWithFS(manager, nil, testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(manager, nil, testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
@@ -333,7 +370,7 @@ func TestSystemdPodmanExecutorReturnsSystemdError(t *testing.T) {
 }
 
 func TestSystemdPodmanExecutorRejectsInvalidProvision(t *testing.T) {
-	exec := NewSystemdPodmanWithFS(nil, nil, testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(nil, nil, testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		NodeID:     "node_1",
 		Action:     admiral.ActionProvisionApp,
@@ -348,7 +385,7 @@ func TestSystemdPodmanExecutorRejectsInvalidProvision(t *testing.T) {
 func TestSystemdPodmanExecutorInspectAppSnapshot(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_1",
@@ -385,7 +422,7 @@ func TestSystemdPodmanExecutorBackupUsesPodInfraContainer(t *testing.T) {
 		},
 	}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", testRootlessUser(t), fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), testRootlessUser(t), fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_3",
@@ -449,7 +486,7 @@ func TestSystemdPodmanExecutorBackupUsesPodInfraContainer(t *testing.T) {
 }
 
 func TestSystemdPodmanExecutorVolumeBackupArtifactIsPrivate(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := testPackageManagedDataDir(t)
 	mountpoint := filepath.Join(t.TempDir(), "volume")
 	if err := os.MkdirAll(mountpoint, 0700); err != nil {
 		t.Fatalf("create volume mountpoint: %v", err)
@@ -498,7 +535,7 @@ func TestSystemdPodmanExecutorPostgresBackupWaitsForReadiness(t *testing.T) {
 		},
 	}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", testRootlessUser(t), fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), testRootlessUser(t), fakeFS{}, fakeUserLookup{})
 
 	result := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_pg_backup",
@@ -551,7 +588,7 @@ func TestSystemdPodmanExecutorPostgresBackupWaitsForReadiness(t *testing.T) {
 func TestSystemdPodmanExecutorRestorePostgresUsesCleanRestore(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	dir := t.TempDir()
+	dir := testPackageManagedDataDir(t)
 	if err := os.MkdirAll(filepath.Join(dir, "backups", "demo001"), 0755); err != nil {
 		t.Fatalf("create backup dir: %v", err)
 	}
@@ -639,7 +676,7 @@ func TestSystemdPodmanExecutorRestoreUnpausesPausedPod(t *testing.T) {
 		},
 	}
 	systemdRunner := &fakeSystemdRunner{}
-	dir := t.TempDir()
+	dir := testPackageManagedDataDir(t)
 	if err := os.MkdirAll(filepath.Join(dir, "backups", "demo001"), 0755); err != nil {
 		t.Fatalf("create backup dir: %v", err)
 	}
@@ -879,7 +916,7 @@ func TestSystemdPodmanExecutorVerifyRestoreChecksumAcceptsCompressedOrPayload(t 
 }
 
 func TestSystemdPodmanExecutorResolveLocalBackupPathConfinesToRoot(t *testing.T) {
-	dir := t.TempDir()
+	dir := testPackageManagedDataDir(t)
 	exec := NewSystemdPodmanWithFS(nil, nil, testPackageManagedQuadletDir(t), dir, "nobody", fakeFS{}, fakeUserLookup{})
 
 	path, err := exec.resolveLocalBackupPath("instance01/db.dump")
@@ -926,7 +963,7 @@ func TestSystemdPodmanExecutorFetchRestoreArtifactRejectsEscapingPath(t *testing
 func TestSystemdPodmanExecutorPauseUsesSystemdStop(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_pause_1",
@@ -970,7 +1007,7 @@ func TestSystemdPodmanExecutorPauseUsesSystemdStop(t *testing.T) {
 func TestSystemdPodmanExecutorResumeUsesSystemdStart(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_resume_1",
@@ -1021,7 +1058,7 @@ func TestSystemdPodmanExecutorResumeStartsWhenPodDoesNotExist(t *testing.T) {
 		},
 	}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_resume_missing_pod",
@@ -1063,7 +1100,7 @@ func TestSystemdPodmanExecutorResumeUnpausesRestoredPod(t *testing.T) {
 		},
 	}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_resume_paused_1",
@@ -1103,7 +1140,7 @@ func TestSystemdPodmanExecutorResumeFailsWhenUnpauseFails(t *testing.T) {
 		},
 	}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_resume_paused_error",
@@ -1131,7 +1168,7 @@ func TestSystemdPodmanExecutorRetriesContainerMaterialization(t *testing.T) {
 		output:   []byte(`[ {"Id":"abc","Image":"sha256:image","ImageName":"example.com/app:1","Config":{"Image":"example.com/app:1"}} ]`),
 	}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	_, err := exec.startImageEvidence(context.Background(), admiral.FleetTask{
 		InstanceID: "demo001",
@@ -1145,7 +1182,7 @@ func TestSystemdPodmanExecutorRetriesContainerMaterialization(t *testing.T) {
 func TestSystemdPodmanExecutorPauseIdempotentOnMissingInstance(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_pause_missing",
@@ -1187,7 +1224,7 @@ func TestSystemdPodmanExecutorPauseIdempotentOnMissingInstance(t *testing.T) {
 func TestSystemdPodmanExecutorStopUsesSystemd(t *testing.T) {
 	podmanRunner := &fakePodmanRunner{}
 	systemdRunner := &fakeSystemdRunner{}
-	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), "/tmp/data", "nobody", fakeFS{}, fakeUserLookup{})
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), testPackageManagedQuadletDir(t), testPackageManagedDataDir(t), "nobody", fakeFS{}, fakeUserLookup{})
 
 	res := exec.Execute(context.Background(), admiral.FleetTask{
 		TaskID:      "task_stop_1",

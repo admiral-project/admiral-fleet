@@ -232,6 +232,17 @@ func TestOutboxEnqueue(t *testing.T) {
 	}
 }
 
+func TestOutboxEnqueueRequiresPackageManagedDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "outbox")
+	err := newOutbox(dir).enqueue(admiral.TaskResult{TaskID: "t1", OperationID: "op1"})
+	if err == nil {
+		t.Fatal("expected enqueue to fail when the package-managed directory is missing")
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Fatalf("enqueue must not create the package-managed directory, stat error = %v", statErr)
+	}
+}
+
 func TestOutboxFlushSendsAndRemoves(t *testing.T) {
 	dir := t.TempDir()
 	o := newOutbox(dir)

@@ -16,12 +16,46 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/osutil"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/systemd"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
+
+func (e *SystemdPodmanExecutor) dataDir() string {
+	if strings.TrimSpace(e.DataDir) == "" {
+		return "/var/lib/admiral"
+	}
+	return e.DataDir
+}
+
+func (e *SystemdPodmanExecutor) validatePackageManagedDir(path string, mode os.FileMode) error {
+	fs := e.FS
+	if fs == nil {
+		fs = osutil.RealFileSystem{}
+	}
+	info, err := fs.Stat(path)
+	if err != nil {
+		return fmt.Errorf("package-managed directory %q is unavailable; install or repair admiral-common: %w", path, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("package-managed path %q is not a directory; repair admiral-common", path)
+	}
+	if actual := info.Mode().Perm(); actual != mode {
+		return fmt.Errorf("package-managed directory %q has mode %04o, expected %04o from admiral-common; repair the package", path, actual, mode)
+	}
+	return nil
+}
+
+func (e *SystemdPodmanExecutor) validateInstanceDataRoots() error {
+	base := e.dataDir()
+	if err := e.validatePackageManagedDir(base, 0751); err != nil {
+		return err
+	}
+	return e.validatePackageManagedDir(filepath.Join(base, "instances"), 0751)
+}
 
 func lookupEnv(svc admiral.ServiceInfo, key string) (string, bool) {
 	if val, ok := svc.Env[key]; ok {
@@ -92,6 +126,9 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 		dataDir = "/var/lib/admiral"
 	}
 	instDir := filepath.Join(dataDir, "instances", instanceID)
+	if err := e.validateInstanceDataRoots(); err != nil {
+		return err
+	}
 	if err := e.FS.Walk(instDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -120,7 +157,7 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 	}
 	// Ensure rootless user can traverse to the instance env files without
 	// granting it write access to the control-file directories.
-	for _, dir := range []string{dataDir, filepath.Join(dataDir, "instances"), instDir, filepath.Join(instDir, "env")} {
+	for _, dir := range []string{instDir, filepath.Join(instDir, "env")} {
 		if err := e.FS.Chmod(dir, 0751); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("chmod %q for rootless traversal: %w", dir, err)
 		}
@@ -160,14 +197,10 @@ func (e *SystemdPodmanExecutor) chownRestoreDir(dir string) error {
 	if err != nil {
 		return fmt.Errorf("parse rootless gid %q: %w", u.Gid, err)
 	}
-	base := e.DataDir
-	if strings.TrimSpace(base) == "" {
-		base = "/var/lib/admiral"
-	}
+	base := e.dataDir()
 	restoreRoot := filepath.Clean(filepath.Join(base, "restore"))
-	// The rootless user must be able to traverse down to the staging dir.
-	if err := e.FS.Chmod(restoreRoot, 0751); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("chmod restore root %q for rootless traversal: %w", restoreRoot, err)
+	if err := e.validatePackageManagedDir(restoreRoot, 0750); err != nil {
+		return err
 	}
 	// Hand the staging dir and its artifacts to the rootless user so podman cp
 	// can read the decompressed dump.

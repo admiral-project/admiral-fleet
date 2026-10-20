@@ -62,7 +62,13 @@ func (e *SystemdPodmanExecutor) backupDatabase(ctx context.Context, task admiral
 	if strings.TrimSpace(base) == "" {
 		base = "/var/lib/admiral"
 	}
-	dir := filepath.Join(base, "backups", task.InstanceID)
+	backupRoot := filepath.Join(base, "backups")
+	if err := e.validatePackageManagedDir(backupRoot, 0750); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+	dir := filepath.Join(backupRoot, task.InstanceID)
 	if err := e.FS.MkdirAll(dir, 0700); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("create backup dir: %v", err)
@@ -145,7 +151,13 @@ func (e *SystemdPodmanExecutor) backupVolumes(ctx context.Context, task admiral.
 	if strings.TrimSpace(base) == "" {
 		base = "/var/lib/admiral"
 	}
-	dir := filepath.Join(base, "backups", task.InstanceID)
+	backupRoot := filepath.Join(base, "backups")
+	if err := e.validatePackageManagedDir(backupRoot, 0750); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+	dir := filepath.Join(backupRoot, task.InstanceID)
 	if err := e.FS.MkdirAll(dir, 0700); err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("create backup dir: %v", err)

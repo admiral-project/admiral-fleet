@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,15 +104,6 @@ func parsePublishedPort(raw string) (int, error) {
 
 func NewSystemdPodmanWithFS(systemdManager *systemd.Manager, podmanInspector *podman.Inspector, quadletDir, dataDir, rootlessUser string, fs osutil.FileSystem, userLookup osutil.UserLookup) *SystemdPodmanExecutor {
 	rd := quadlet.NewRenderer(quadletDir, dataDir)
-	// Ensure data dir is traversable for rootless user
-	if rootlessUser != "" {
-		for _, dir := range []string{dataDir, filepath.Join(dataDir, "instances")} {
-			if err := fs.MkdirAll(dir, 0751); err != nil {
-				break
-			}
-			_ = fs.Chmod(dir, 0751)
-		}
-	}
 
 	return &SystemdPodmanExecutor{
 		Systemd:      systemdManager,

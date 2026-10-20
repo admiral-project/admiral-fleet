@@ -70,33 +70,31 @@ func (e *SystemdPodmanExecutor) prepareStorageRoots() error {
 	if strings.TrimSpace(base) == "" {
 		base = "/var/lib/admiral"
 	}
-	for _, root := range []string{
-		filepath.Join(base, "backups"),
-		filepath.Join(base, "restore"),
-		filepath.Join(base, "tmp"),
+	for _, root := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{path: filepath.Join(base, "backups"), mode: 0750},
+		{path: filepath.Join(base, "restore"), mode: 0750},
+		{path: filepath.Join(base, "tmp"), mode: 0700},
 	} {
-		if err := e.FS.MkdirAll(root, 0751); err != nil {
-			return fmt.Errorf("create storage root %q: %w", root, err)
-		}
-		if err := e.FS.Lchown(root, uid, gid); err != nil {
-			return fmt.Errorf("chown storage root %q: %w", root, err)
-		}
-		if err := e.FS.Chmod(root, 0751); err != nil {
-			return fmt.Errorf("chmod storage root %q: %w", root, err)
+		if err := e.validatePackageManagedDir(root.path, root.mode); err != nil {
+			return err
 		}
 		// Hand pre-existing artifacts (created by older root-based fleet
-		// versions) to the rootless user so the helper can write there.
+		// versions) to the rootless user so the helper can write there. The
+		// package-managed root itself is never changed by Fleet.
 		// Symlinks are skipped and never followed.
-		if err := e.FS.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err := e.FS.Walk(root.path, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-			if path == root {
+			if path == root.path {
 				return nil
 			}
 			return e.chownForRootless(path, info, uid, gid)
 		}); err != nil {
-			return fmt.Errorf("chown storage tree %q: %w", root, err)
+			return fmt.Errorf("chown storage tree %q: %w", root.path, err)
 		}
 	}
 	return nil
