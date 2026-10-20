@@ -411,6 +411,19 @@ func TestInspectorPodIsPausedReturnsFalseWhenPodDoesNotExist(t *testing.T) {
 	}
 }
 
+func TestInspectorPodIsPausedDoesNotHideDifferentPodError(t *testing.T) {
+	runner := &fakeRunner{err: errors.New("exit status 125: Error: no such pod another-pod")}
+	inspector := NewInspector(runner)
+
+	paused, err := inspector.PodIsPaused(context.Background(), "admiral-demo")
+	if err == nil {
+		t.Fatal("expected an unrelated Podman missing-pod error to be returned")
+	}
+	if paused {
+		t.Fatal("expected pod not to be paused")
+	}
+}
+
 func TestInspectorPauseUnpausePod(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)

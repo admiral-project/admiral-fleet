@@ -322,6 +322,9 @@ func resolveTrustedRestoreOrigin(ctx context.Context, parsed *url.URL, origin, p
 		return nil, fmt.Errorf("restore URL is outside the trusted path")
 	}
 	query := parsed.Query()
+	// Harbor verifies the HMAC on this download URL. Fleet does not hold Harbor's
+	// signing key: it treats the signature as a required capability marker, then
+	// enforces the trusted origin, path, pinned IPs, and Admiral CA below.
 	if query.Get("customer_id") == "" || query.Get("expires") == "" || query.Get("signature") == "" {
 		return nil, fmt.Errorf("restore URL is missing its signed download capability")
 	}
@@ -395,9 +398,6 @@ func newRestoreHTTPClient(ctx context.Context, sourceURI, trustedSourceIP, trust
 		}
 		if rootCAs == nil {
 			return nil, fmt.Errorf("load system certificate roots for Harbor restore: system root pool is unavailable")
-		}
-		if len(trustedCACertPEM) == 0 {
-			return nil, fmt.Errorf("trusted Harbor restore requires a configured Admiral CA certificate")
 		}
 		if !rootCAs.AppendCertsFromPEM(trustedCACertPEM) {
 			return nil, fmt.Errorf("Admiral CA certificate contains no valid certificates")

@@ -532,7 +532,7 @@ func (i *Inspector) PodUnpause(ctx context.Context, podName string) error {
 func (i *Inspector) PodIsPaused(ctx context.Context, podName string) (bool, error) {
 	out, err := i.run(ctx, "pod", "inspect", podName, "--format", "{{.State}}")
 	if err != nil {
-		if isPodmanPodNotFound(err) {
+		if isPodmanPodNotFound(err, podName) {
 			// A stopped instance may have no Podman pod yet. Resume should then
 			// continue through the normal Quadlet/systemd start path.
 			return false, nil
@@ -542,11 +542,11 @@ func (i *Inspector) PodIsPaused(ctx context.Context, podName string) (bool, erro
 	return strings.TrimSpace(string(out)) == "Paused", nil
 }
 
-func isPodmanPodNotFound(err error) bool {
+func isPodmanPodNotFound(err error, podName string) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "no such pod")
+	return strings.Contains(strings.ToLower(err.Error()), "no such pod "+strings.ToLower(podName))
 }
 
 func (i *Inspector) run(ctx context.Context, args ...string) ([]byte, error) {
