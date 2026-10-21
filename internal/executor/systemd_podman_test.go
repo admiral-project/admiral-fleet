@@ -1030,6 +1030,52 @@ func TestSystemdPodmanExecutorDeprovisionRetryCompletesAfterTransientRemovalFail
 	}
 }
 
+func TestSystemdPodmanExecutorDeprovisionTreatsNotInstalledUnitAsIdempotent(t *testing.T) {
+	quadletDir := testPackageManagedQuadletDir(t)
+	dataDir := t.TempDir()
+	instanceDir := filepath.Join(dataDir, "instances", "demo001")
+	if err := os.MkdirAll(instanceDir, 0755); err != nil {
+		t.Fatalf("create instance data dir: %v", err)
+	}
+	quadletFile := filepath.Join(quadletDir, "admiral-demo001.pod")
+	if err := os.WriteFile(quadletFile, []byte("[Pod]\n"), 0600); err != nil {
+		t.Fatalf("create Quadlet file: %v", err)
+	}
+	markerFile := filepath.Join(instanceDir, "ports.json")
+	if err := os.WriteFile(markerFile, []byte("{}"), 0600); err != nil {
+		t.Fatalf("create instance marker: %v", err)
+	}
+
+	unit := "admiral-demo001-pod.service"
+	systemdRunner := &fakeSystemdRunner{overrides: map[string]error{
+		"stop " + unit:    errors.New("systemd-run: exit status 5: status=5/NOTINSTALLED"),
+		"disable " + unit: errors.New("systemd-run: exit status 1: status=1/FAILURE"),
+	}}
+	podmanRunner := &fakePodmanRunner{}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), quadletDir, dataDir, "nobody", fakeFS{}, fakeUserLookup{})
+	res := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:     "task_deprovision_missing_unit",
+		NodeID:     "node_1",
+		Action:     admiral.ActionDeprovisionApp,
+		InstanceID: "demo001",
+		Services:   []admiral.ServiceInfo{{Name: "db", Volume: "db-data"}},
+	}, "node_1")
+	if !res.Success {
+		t.Fatalf("deprovision should tolerate an already-uninstalled unit, got %q", res.Error)
+	}
+
+	for _, call := range systemdRunner.calls {
+		if strings.Contains(strings.Join(call, " "), "disable "+unit) {
+			t.Fatalf("must skip disable after systemd reports NOTINSTALLED, calls: %#v", systemdRunner.calls)
+		}
+	}
+	for _, path := range []string{quadletFile, markerFile} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("successful cleanup should remove %q, stat error=%v", path, err)
+		}
+	}
+}
+
 func TestSystemdPodmanExecutorProvisionFailsAndCleansUpWhenDeclaredServiceIsMissing(t *testing.T) {
 	quadletDir := testPackageManagedQuadletDir(t)
 	dataDir := testPackageManagedDataDir(t)

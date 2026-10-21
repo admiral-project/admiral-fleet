@@ -24,10 +24,20 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 	}
 	var cleanupErrs []error
 	for _, unit := range deprovisionUnitNames(task) {
-		if err := e.systemd().Stop(ctx, unit); err != nil {
-			if !isMissingUnitDuringDeprovision(err) {
-				cleanupErrs = append(cleanupErrs, fmt.Errorf("stop unit %q: %w", unit, err))
+		stopErr := e.systemd().Stop(ctx, unit)
+		unitMissing := isMissingUnitDuringDeprovision(stopErr)
+		if stopErr != nil {
+			if !unitMissing {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("stop unit %q: %w", unit, stopErr))
 			}
+		}
+		// A generated Quadlet unit that systemd reports as not installed
+		// cannot be disabled. In particular, systemd-run exposes systemctl's
+		// NOTINSTALLED result as its own exit status, while a separate disable
+		// attempt only reports a generic FAILURE. Skip that redundant attempt;
+		// the Quadlet source is removed after runtime cleanup succeeds below.
+		if unitMissing {
+			continue
 		}
 		if err := e.systemd().Disable(ctx, unit); err != nil {
 			if !isMissingUnitDuringDeprovision(err) {
@@ -122,6 +132,7 @@ func isMissingUnitDuringDeprovision(err error) bool {
 		strings.Contains(message, "unit not loaded") ||
 		strings.Contains(message, "unit is not loaded") ||
 		strings.Contains(message, "unit not available") ||
+		strings.Contains(message, "notinstalled") ||
 		(strings.Contains(message, "unit file") && strings.Contains(message, "does not exist"))
 }
 
