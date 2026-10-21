@@ -1,6 +1,6 @@
 module github.com/admiral-project/admiral/admiral-fleet
 
-go 1.26.5
+go 1.26.10
 
 replace github.com/admiral-project/admiral/admirald => ./local_deps/admirald
 
