@@ -80,10 +80,21 @@ func TestInspectorUsesPodmanArgumentArrays(t *testing.T) {
 		{name: "podman", args: []string{"pod", "exists", "admiral-demo"}},
 		{name: "podman", args: []string{"pod", "ps", "--format", "json"}},
 		{name: "podman", args: []string{"ps", "--format", "json"}},
-		{name: "podman", args: []string{"pod", "rm", "--force", "admiral-demo"}},
+		{name: "podman", args: []string{"pod", "rm", "--force", "--ignore", "admiral-demo"}},
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)
+	}
+}
+
+func TestInspectorRemoveContainerIgnoresMissingContainer(t *testing.T) {
+	runner := &fakeRunner{}
+	inspector := NewInspector(runner)
+	if err := inspector.RemoveContainer(context.Background(), "admiral-demo-app"); err != nil {
+		t.Fatalf("remove container: %v", err)
+	}
+	if want := []string{"rm", "--force", "--ignore", "admiral-demo-app"}; !reflect.DeepEqual(runner.calls[0].args, want) {
+		t.Fatalf("remove container args = %#v, want %#v", runner.calls[0].args, want)
 	}
 }
 
@@ -264,6 +275,30 @@ func TestInspectorVolumeMethods(t *testing.T) {
 	}
 }
 
+func TestInspectorRemoveVolumeTreatsMissingVolumeAsSuccess(t *testing.T) {
+	for _, message := range []string{
+		"Error: no such volume: admiral-demo-db",
+		"Error: volume admiral-demo-db does not exist",
+		"Error: no volume with name or ID admiral-demo-db",
+	} {
+		t.Run(message, func(t *testing.T) {
+			runner := &fakeRunner{err: errors.New(message)}
+			inspector := NewInspector(runner)
+			if err := inspector.RemoveVolume(context.Background(), "admiral-demo-db"); err != nil {
+				t.Fatalf("missing volume should be idempotent, got %v", err)
+			}
+		})
+	}
+}
+
+func TestInspectorRemoveVolumeReturnsNonNotFoundError(t *testing.T) {
+	runner := &fakeRunner{err: errors.New("Error: permission denied")}
+	inspector := NewInspector(runner)
+	if err := inspector.RemoveVolume(context.Background(), "admiral-demo-db"); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("expected permission error, got %v", err)
+	}
+}
+
 func TestInspectorExtractTarUsesRootlessNamespace(t *testing.T) {
 	runner := &fakeRunner{}
 	inspector := NewInspector(runner)
@@ -320,7 +355,7 @@ func TestInspectorContainerMethods(t *testing.T) {
 	expected := []call{
 		{name: "podman", args: []string{"container", "exists", "my-cont"}},
 		{name: "podman", args: []string{"container", "inspect", "my-cont", "--format", "json"}},
-		{name: "podman", args: []string{"rm", "--force", "my-cont"}},
+		{name: "podman", args: []string{"rm", "--force", "--ignore", "my-cont"}},
 	}
 	if !reflect.DeepEqual(runner.calls, expected) {
 		t.Fatalf("unexpected calls:\nwant: %#v\ngot:  %#v", expected, runner.calls)

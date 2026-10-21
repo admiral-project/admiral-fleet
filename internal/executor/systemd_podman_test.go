@@ -23,13 +23,20 @@ import (
 )
 
 type fakeSystemdRunner struct {
-	calls [][]string
-	err   error
+	calls     [][]string
+	err       error
+	overrides map[string]error
 }
 
 func (r *fakeSystemdRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := append([]string{name}, args...)
 	r.calls = append(r.calls, call)
+	joined := strings.Join(call, " ")
+	for contains, err := range r.overrides {
+		if strings.Contains(joined, contains) {
+			return nil, err
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -812,7 +819,7 @@ func TestSystemdPodmanExecutorDeprovisionRemovesPodAndVolumeUnits(t *testing.T) 
 	foundRemoveDBSecret := false
 	for _, call := range podmanRunner.calls {
 		joined := strings.Join(call, " ")
-		if strings.Contains(joined, "podman pod rm --force admiral-demo001") {
+		if strings.Contains(joined, "podman pod rm --force --ignore admiral-demo001") {
 			foundRemovePod = true
 		}
 		if strings.Contains(joined, "podman volume rm --force admiral-demo001-db") {
@@ -861,6 +868,165 @@ func TestSystemdPodmanExecutorDeprovisionFailsWhenSecretRemovalFails(t *testing.
 
 	if res.Success || !strings.Contains(res.Error, "permission denied") {
 		t.Fatalf("expected secret removal failure, got success=%v error=%q", res.Success, res.Error)
+	}
+}
+
+func TestSystemdPodmanExecutorDeprovisionPreservesRetryStateOnCleanupFailure(t *testing.T) {
+	tests := []struct {
+		name           string
+		podmanFailure  string
+		systemdFailure string
+		failureMessage string
+	}{
+		{name: "pod", podmanFailure: "podman pod rm --force --ignore admiral-demo001", failureMessage: "pod removal failed"},
+		{name: "container", podmanFailure: "podman rm --force --ignore admiral-demo001-db", failureMessage: "container removal failed"},
+		{name: "volume", podmanFailure: "podman volume rm --force admiral-demo001-db", failureMessage: "volume removal failed"},
+		{name: "secret", podmanFailure: "podman secret rm admiral-demo001-db-PASSWORD", failureMessage: "secret removal failed"},
+		{name: "systemd stop", systemdFailure: "stop admiral-demo001-pod.service", failureMessage: "systemd stop failed"},
+		{name: "systemd disable", systemdFailure: "disable admiral-demo001-pod.service", failureMessage: "systemd disable failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			quadletDir := testPackageManagedQuadletDir(t)
+			dataDir := t.TempDir()
+			instanceDir := filepath.Join(dataDir, "instances", "demo001")
+			if err := os.MkdirAll(instanceDir, 0755); err != nil {
+				t.Fatalf("create instance data dir: %v", err)
+			}
+			quadletFile := filepath.Join(quadletDir, "admiral-demo001.pod")
+			if err := os.WriteFile(quadletFile, []byte("[Pod]\n"), 0600); err != nil {
+				t.Fatalf("create Quadlet file: %v", err)
+			}
+			markerFile := filepath.Join(instanceDir, "ports.json")
+			if err := os.WriteFile(markerFile, []byte("{}"), 0600); err != nil {
+				t.Fatalf("create instance marker: %v", err)
+			}
+
+			podmanRunner := &fakePodmanRunner{}
+			if tt.podmanFailure != "" {
+				podmanRunner.overrides = map[string]fakeOverride{
+					"injected cleanup failure": {contains: tt.podmanFailure, err: errors.New(tt.failureMessage)},
+				}
+			}
+			systemdRunner := &fakeSystemdRunner{}
+			if tt.systemdFailure != "" {
+				systemdRunner.overrides = map[string]error{tt.systemdFailure: errors.New(tt.failureMessage)}
+			}
+			exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), quadletDir, dataDir, "nobody", fakeFS{}, fakeUserLookup{})
+			res := exec.Execute(context.Background(), admiral.FleetTask{
+				TaskID:      "task_deprovision_failure",
+				OperationID: "op_deprovision_failure",
+				NodeID:      "node_1",
+				Action:      admiral.ActionDeprovisionApp,
+				InstanceID:  "demo001",
+				Services: []admiral.ServiceInfo{{
+					Name:    "db",
+					Volume:  "db-data",
+					Secrets: map[string]string{"PASSWORD": "value"},
+				}},
+			}, "node_1")
+
+			if res.Success || !strings.Contains(res.Error, tt.failureMessage) {
+				t.Fatalf("expected cleanup failure %q, got success=%v error=%q", tt.failureMessage, res.Success, res.Error)
+			}
+			if _, err := os.Stat(quadletFile); err != nil {
+				t.Fatalf("Quadlet file must remain available for retry: %v", err)
+			}
+			if _, err := os.Stat(markerFile); err != nil {
+				t.Fatalf("instance metadata must remain available for retry: %v", err)
+			}
+		})
+	}
+}
+
+func TestSystemdPodmanExecutorDeprovisionContinuesCleanupAndIsIdempotentForMissingUnits(t *testing.T) {
+	quadletDir := testPackageManagedQuadletDir(t)
+	dataDir := t.TempDir()
+	systemdRunner := &fakeSystemdRunner{overrides: map[string]error{
+		"stop admiral-demo001-pod.service":    errors.New("Unit admiral-demo001-pod.service not loaded."),
+		"disable admiral-demo001-pod.service": errors.New("Unit file admiral-demo001-pod.service does not exist."),
+	}}
+	podmanRunner := &fakePodmanRunner{overrides: map[string]fakeOverride{
+		"pod removal": {contains: "podman pod rm --force --ignore admiral-demo001", err: errors.New("pod removal failed")},
+	}}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), quadletDir, dataDir, "nobody", fakeFS{}, fakeUserLookup{})
+	res := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:     "task_deprovision_partial",
+		NodeID:     "node_1",
+		Action:     admiral.ActionDeprovisionApp,
+		InstanceID: "demo001",
+		Services: []admiral.ServiceInfo{{
+			Name:    "db",
+			Volume:  "db-data",
+			Secrets: map[string]string{"PASSWORD": "value"},
+		}},
+	}, "node_1")
+	if res.Success || !strings.Contains(res.Error, "pod removal failed") {
+		t.Fatalf("expected pod removal failure, got success=%v error=%q", res.Success, res.Error)
+	}
+
+	var removedContainer, removedVolume, removedSecret bool
+	for _, call := range podmanRunner.calls {
+		joined := strings.Join(call, " ")
+		removedContainer = removedContainer || strings.Contains(joined, "podman rm --force --ignore admiral-demo001-db")
+		removedVolume = removedVolume || strings.Contains(joined, "podman volume rm --force admiral-demo001-db")
+		removedSecret = removedSecret || strings.Contains(joined, "podman secret rm admiral-demo001-db-PASSWORD")
+	}
+	if !removedContainer || !removedVolume || !removedSecret {
+		t.Fatalf("cleanup must continue after pod failure; container=%v volume=%v secret=%v calls=%#v", removedContainer, removedVolume, removedSecret, podmanRunner.calls)
+	}
+}
+
+func TestSystemdPodmanExecutorDeprovisionRetryCompletesAfterTransientRemovalFailure(t *testing.T) {
+	quadletDir := testPackageManagedQuadletDir(t)
+	dataDir := t.TempDir()
+	instanceDir := filepath.Join(dataDir, "instances", "demo001")
+	if err := os.MkdirAll(instanceDir, 0755); err != nil {
+		t.Fatalf("create instance data dir: %v", err)
+	}
+	quadletFile := filepath.Join(quadletDir, "admiral-demo001.pod")
+	if err := os.WriteFile(quadletFile, []byte("[Pod]\n"), 0600); err != nil {
+		t.Fatalf("create Quadlet file: %v", err)
+	}
+	markerFile := filepath.Join(instanceDir, "ports.json")
+	if err := os.WriteFile(markerFile, []byte("{}"), 0600); err != nil {
+		t.Fatalf("create instance marker: %v", err)
+	}
+
+	podmanRunner := &fakePodmanRunner{
+		execSequenceContains: "podman pod rm --force --ignore admiral-demo001",
+		execSequence: []fakePodmanResponse{
+			{err: errors.New("injected transient Podman failure")},
+			{output: []byte("removed")},
+		},
+	}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(&fakeSystemdRunner{}), podman.NewInspector(podmanRunner), quadletDir, dataDir, "nobody", fakeFS{}, fakeUserLookup{})
+	task := admiral.FleetTask{
+		TaskID:     "task_deprovision_retry",
+		NodeID:     "node_1",
+		Action:     admiral.ActionDeprovisionApp,
+		InstanceID: "demo001",
+		Services: []admiral.ServiceInfo{{
+			Name:    "db",
+			Volume:  "db-data",
+			Secrets: map[string]string{"PASSWORD": "value"},
+		}},
+	}
+
+	first := exec.Execute(context.Background(), task, "node_1")
+	if first.Success || !strings.Contains(first.Error, "injected transient Podman failure") {
+		t.Fatalf("first deprovision should fail with Podman error, got success=%v error=%q", first.Success, first.Error)
+	}
+
+	second := exec.Execute(context.Background(), task, "node_1")
+	if !second.Success {
+		t.Fatalf("retry should finish deprovision, got %q", second.Error)
+	}
+	for _, path := range []string{quadletFile, markerFile} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("successful retry should remove %q, stat error=%v", path, err)
+		}
 	}
 }
 

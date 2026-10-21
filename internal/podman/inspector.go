@@ -441,18 +441,34 @@ func (i *Inspector) CopyToContainer(ctx context.Context, sourcePath, containerPa
 }
 
 func (i *Inspector) RemovePod(ctx context.Context, podName string) error {
-	_, err := i.run(ctx, "pod", "rm", "--force", podName)
+	_, err := i.run(ctx, "pod", "rm", "--force", "--ignore", podName)
 	return err
 }
 
 func (i *Inspector) RemoveContainer(ctx context.Context, name string) error {
-	_, err := i.run(ctx, "rm", "--force", name)
+	_, err := i.run(ctx, "rm", "--force", "--ignore", name)
 	return err
 }
 
 func (i *Inspector) RemoveVolume(ctx context.Context, name string) error {
 	_, err := i.run(ctx, "volume", "rm", "--force", name)
+	if isPodmanVolumeNotFound(err, name) {
+		return nil
+	}
 	return err
+}
+
+func isPodmanVolumeNotFound(err error, name string) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	lowerName := strings.ToLower(name)
+	return strings.Contains(message, "no such volume") ||
+		strings.Contains(message, "volume does not exist") ||
+		strings.Contains(message, "volume "+lowerName+" does not exist") ||
+		strings.Contains(message, "volume \""+lowerName+"\" does not exist") ||
+		strings.Contains(message, "no volume with name or id "+lowerName)
 }
 
 // SecretCreate creates a Podman secret with the given name and value.

@@ -5,6 +5,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -21,19 +22,24 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 		result.Error = fmt.Sprintf("invalid instance_id: %v", err)
 		return result
 	}
+	var cleanupErrs []error
 	for _, unit := range deprovisionUnitNames(task) {
 		if err := e.systemd().Stop(ctx, unit); err != nil {
-			slog.Debug("stop unit during deprovision", "unit", unit, "error", err)
+			if !isMissingUnitDuringDeprovision(err) {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("stop unit %q: %w", unit, err))
+			}
 		}
 		if err := e.systemd().Disable(ctx, unit); err != nil {
-			slog.Debug("disable unit during deprovision", "unit", unit, "error", err)
+			if !isMissingUnitDuringDeprovision(err) {
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("disable unit %q: %w", unit, err))
+			}
 		}
 	}
 
 	// Force-remove the pod before removing service containers and volumes.
 	if usesPod(task) {
 		if err := e.podman().RemovePod(ctx, podName(task.InstanceID)); err != nil {
-			slog.Debug("remove pod during deprovision", "instance", task.InstanceID, "error", err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("remove pod for %q: %w", task.InstanceID, err))
 		}
 	}
 
@@ -41,27 +47,34 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 	for _, svc := range task.Services {
 		cName := containerName(task.InstanceID, svc.Name)
 		if err := e.podman().RemoveContainer(ctx, cName); err != nil {
-			slog.Debug("remove container during deprovision", "container", cName, "error", err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("remove container %q: %w", cName, err))
 		}
 		if svc.Volume != "" {
 			vName := volumeName(task.InstanceID, svc.Name)
 			if err := e.podman().RemoveVolume(ctx, vName); err != nil {
-				slog.Debug("remove volume during deprovision", "volume", vName, "error", err)
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("remove volume %q: %w", vName, err))
 			}
 		}
 	}
 	for _, shared := range task.SharedVolumes {
 		vName := sharedVolumeName(task.InstanceID, shared.Name)
 		if err := e.podman().RemoveVolume(ctx, vName); err != nil {
-			slog.Debug("remove shared volume during deprovision", "volume", vName, "error", err)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("remove shared volume %q: %w", vName, err))
 		}
 	}
 
 	// Remove Podman secrets before Quadlet files so the secret names
 	// are still known (they're derived from the task.Services, not from files).
 	if err := e.removePodmanSecrets(ctx, task); err != nil {
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("remove Podman secrets for %q: %w", task.InstanceID, err))
+	}
+
+	// Keep the Quadlet and instance metadata when any managed runtime cleanup
+	// fails. They are needed to retry deprovision and to avoid reporting success
+	// while Podman resources may still exist.
+	if err := errors.Join(cleanupErrs...); err != nil {
 		result.Success = false
-		result.Error = fmt.Sprintf("remove Podman secrets for %q: %v", task.InstanceID, err)
+		result.Error = fmt.Sprintf("deprovision instance %q cleanup failed: %v", task.InstanceID, err)
 		return result
 	}
 
@@ -98,6 +111,18 @@ func (e *SystemdPodmanExecutor) deprovision(ctx context.Context, task admiral.Fl
 	result.Success = true
 	result.Logs = fmt.Sprintf("deprovisioned instance %s", task.InstanceID)
 	return result
+}
+
+func isMissingUnitDuringDeprovision(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unit not found") ||
+		strings.Contains(message, "unit not loaded") ||
+		strings.Contains(message, "unit is not loaded") ||
+		strings.Contains(message, "unit not available") ||
+		(strings.Contains(message, "unit file") && strings.Contains(message, "does not exist"))
 }
 
 func deprovisionUnitNames(task admiral.FleetTask) []string {
