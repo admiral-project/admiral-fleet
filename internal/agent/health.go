@@ -53,6 +53,7 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	containerStates, containerErr := a.listAdmiralContainerStates(ctx)
 
 	for _, pod := range pods {
 		instanceID := extractInstanceID(pod.Name)
@@ -66,6 +67,9 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 		if pod.Status != "Running" {
 			status = "stopped"
 			msg = fmt.Sprintf("pod status is %s", pod.Status)
+		} else if healthy, serviceMessage := checkInstanceServiceContainers(a.QuadletDir, instanceID, containerStates, containerErr); !healthy {
+			status = "unhealthy"
+			msg = serviceMessage
 		}
 
 		report := healthReport{
@@ -76,7 +80,7 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 			CheckedAt:    time.Now().UTC().Format(time.RFC3339),
 		}
 
-		if pod.Status == "Running" {
+		if status == "healthy" {
 			report.HostPorts = a.detectHostPorts(instanceID)
 		}
 
@@ -100,6 +104,52 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func checkInstanceServiceContainers(quadletDir, instanceID string, containerStates map[string]string, inspectErr error) (bool, string) {
+	if quadletDir == "" {
+		quadletDir = "/etc/containers/systemd/admiral"
+	}
+	if inspectErr != nil {
+		return false, "failed to inspect workload containers"
+	}
+	instanceID = sanitizeInstanceID(instanceID)
+	pattern := filepath.Join(quadletDir, "admiral-"+instanceID+"-*.container")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return false, "failed to enumerate declared service units"
+	}
+	if len(files) == 0 {
+		return false, "no declared service units found for running pod"
+	}
+
+	for _, file := range files {
+		containerName := strings.TrimSuffix(filepath.Base(file), ".container")
+		status, ok := containerStates[containerName]
+		if !ok {
+			return false, fmt.Sprintf("service container %q is unavailable", containerName)
+		}
+		if strings.ToLower(strings.TrimSpace(status)) != "running" {
+			return false, fmt.Sprintf("service container %q is not running", containerName)
+		}
+	}
+	return true, ""
+}
+
+func (a *Agent) listAdmiralContainerStates(ctx context.Context) (map[string]string, error) {
+	output, err := a.runPodman(ctx, "ps", "--all", "--format", "{{.Names}}\t{{.State}}")
+	if err != nil {
+		return nil, fmt.Errorf("list workload containers: %w", err)
+	}
+	states := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.SplitN(strings.TrimSpace(line), "\t", 2)
+		if len(fields) != 2 || !strings.HasPrefix(fields[0], "admiral-") {
+			continue
+		}
+		states[fields[0]] = strings.TrimSpace(fields[1])
+	}
+	return states, nil
 }
 
 func (a *Agent) detectHostPorts(instanceID string) map[string]int {

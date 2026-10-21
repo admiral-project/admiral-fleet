@@ -199,23 +199,16 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 					return result
 				}
 			}
-			for _, svc := range task.Services {
-				if err := e.waitForServiceReady(ctx, task.InstanceID, svc, hostPorts); err != nil {
-					result.Success = false
-					result.Error = fmt.Sprintf("wait for service %q after setup restart: %v", svc.Name, err)
-					result.Logs = fmt.Sprintf("service %s was not ready after setup restart for instance %s: %v", svc.Name, task.InstanceID, err)
-					result.Metadata = fmt.Sprintf(
-						`{"executor":"systemd-podman","action":"provision_app","host_ports":%s,"has_setup":true,"setup_failed":true,"setup_error":%q}`,
-						string(hostPortsJSON), err.Error(),
-					)
-					return result
-				}
-			}
 			e.writeSetupMarker(task.InstanceID)
 		}
 	}
 	if task.SetupCompleted {
 		hasSetup = true
+	}
+	for _, svc := range task.Services {
+		if err := e.waitForServiceReady(ctx, task.InstanceID, svc, hostPorts); err != nil {
+			return e.failProvisionReadiness(ctx, task, result, svc.Name, err)
+		}
 	}
 
 	hasSetupJSON := "false"
@@ -228,6 +221,26 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		`{"executor":"systemd-podman","action":"provision_app","host_ports":%s,"has_setup":%s}`,
 		string(hostPortsJSON), hasSetupJSON,
 	)
+	return result
+}
+
+func (e *SystemdPodmanExecutor) failProvisionReadiness(ctx context.Context, task admiral.FleetTask, result admiral.TaskResult, serviceName string, readinessErr error) admiral.TaskResult {
+	// A failed readiness gate must not leave a partially provisioned workload
+	// behind. Use a bounded cleanup context independent of a cancelled deploy
+	// context so timeout/cancellation still triggers best-effort deprovision.
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cleanupResult := e.deprovision(cleanupCtx, task, result)
+
+	result.Success = false
+	result.Error = fmt.Sprintf("service %q failed readiness after provision: %v", serviceName, readinessErr)
+	result.Logs = fmt.Sprintf("provision failed readiness for service %s", serviceName)
+	if !cleanupResult.Success {
+		result.Error += fmt.Sprintf("; automatic cleanup failed: %s", cleanupResult.Error)
+		result.Logs += "; automatic cleanup incomplete"
+	} else {
+		result.Logs += "; partial resources cleaned"
+	}
 	return result
 }
 

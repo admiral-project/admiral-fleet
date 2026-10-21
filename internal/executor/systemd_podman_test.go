@@ -1030,6 +1030,61 @@ func TestSystemdPodmanExecutorDeprovisionRetryCompletesAfterTransientRemovalFail
 	}
 }
 
+func TestSystemdPodmanExecutorProvisionFailsAndCleansUpWhenDeclaredServiceIsMissing(t *testing.T) {
+	quadletDir := testPackageManagedQuadletDir(t)
+	dataDir := testPackageManagedDataDir(t)
+	podmanRunner := &fakePodmanRunner{overrides: map[string]fakeOverride{
+		"pod missing": {
+			contains: "podman pod exists admiral-readinessdemo",
+			err:      os.ErrNotExist,
+		},
+		"missing database service": {
+			contains: "podman container exists admiral-readinessdemo-db",
+			err:      errors.New("no such container"),
+		},
+		"running web service": {
+			contains: "podman container inspect admiral-readinessdemo-web --format json",
+			output:   []byte(`[{"State":{"Status":"running"}}]`),
+		},
+	}}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(&fakeSystemdRunner{}), podman.NewInspector(podmanRunner), quadletDir, dataDir, "nobody", fakeFS{}, fakeUserLookup{})
+	task := admiral.FleetTask{
+		TaskID:     "task_readiness_failure",
+		NodeID:     "node_1",
+		Action:     admiral.ActionProvisionApp,
+		InstanceID: "readinessdemo",
+		Tier: admiral.TierInfo{
+			Name:    "small",
+			CPU:     1,
+			Memory:  "512MiB",
+			Storage: "1GiB",
+		},
+		Services: []admiral.ServiceInfo{
+			{Name: "web", Image: "docker.io/library/nginx:1.27"},
+			{Name: "db", Image: "docker.io/library/postgres:16", Volume: "db_data"},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	result := exec.Execute(ctx, task, "node_1")
+	if result.Success || !strings.Contains(result.Error, `service "db" failed readiness after provision`) {
+		t.Fatalf("expected declared database readiness to fail, got success=%v error=%q", result.Success, result.Error)
+	}
+	if strings.Contains(result.Error, "automatic cleanup failed") {
+		t.Fatalf("expected automatic cleanup to complete, got %q", result.Error)
+	}
+	for _, path := range []string{
+		filepath.Join(quadletDir, "admiral-readinessdemo.pod"),
+		filepath.Join(quadletDir, "admiral-readinessdemo-web.container"),
+		filepath.Join(quadletDir, "admiral-readinessdemo-db.container"),
+		filepath.Join(dataDir, "instances", "readinessdemo"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("partial provisioning resource %q should be removed, stat error=%v", path, err)
+		}
+	}
+}
+
 func TestSystemdPodmanExecutorVerifyRestoreChecksumAcceptsCompressedOrPayload(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "artifact.tar.gz")

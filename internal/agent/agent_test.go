@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,27 @@ import (
 
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
+
+type healthProbePodmanRunner struct {
+	failedContainers map[string]error
+	containerStatus  map[string]string
+}
+
+func (r healthProbePodmanRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	if len(args) >= 3 && args[0] == "pod" && args[1] == "ps" {
+		return []byte("admiral-inst_1\tRunning\n"), nil
+	}
+	if len(args) >= 2 && args[0] == "ps" && args[1] == "--all" {
+		var lines []string
+		for name, status := range r.containerStatus {
+			if r.failedContainers[name] == nil {
+				lines = append(lines, name+"\t"+status)
+			}
+		}
+		return []byte(strings.Join(lines, "\n")), nil
+	}
+	return nil, nil
+}
 
 func TestNewAgentInvalidURL(t *testing.T) {
 	_, err := New("node_1", "http://insecure", "token", "", "/tmp/outbox", "", "", "", "", "", nil)
@@ -1006,5 +1028,110 @@ func TestParseStorageLimitBytesEdgeCases(t *testing.T) {
 				t.Errorf("parseStorageLimitBytes(%q) = %d, want %d", tt.input, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestCheckAllPodsReportsUnhealthyWhenDeclaredServiceIsMissing(t *testing.T) {
+	quadletDir := t.TempDir()
+	for _, name := range []string{"admiral-inst_1.pod", "admiral-inst_1-web.container", "admiral-inst_1-db.container"} {
+		if err := os.WriteFile(filepath.Join(quadletDir, name), []byte("[Unit]\n"), 0600); err != nil {
+			t.Fatalf("write Quadlet fixture %q: %v", name, err)
+		}
+	}
+
+	var reports []healthReport
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var report healthReport
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			t.Errorf("decode health report: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		reports = append(reports, report)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	agent := &Agent{
+		NodeID:     "node_1",
+		APIURL:     server.URL,
+		FleetToken: "test-token",
+		http:       server.Client(),
+		QuadletDir: quadletDir,
+		podmanRunner: healthProbePodmanRunner{
+			containerStatus: map[string]string{"admiral-inst_1-web": "running"},
+			failedContainers: map[string]error{
+				"admiral-inst_1-db": errors.New("no such container"),
+			},
+		},
+	}
+	agent.checkAllPods(context.Background())
+
+	if len(reports) != 1 {
+		t.Fatalf("health reports = %d, want 1: %#v", len(reports), reports)
+	}
+	if reports[0].HealthStatus != "unhealthy" {
+		t.Fatalf("health status = %q, want unhealthy", reports[0].HealthStatus)
+	}
+	if !strings.Contains(reports[0].Message, "admiral-inst_1-db") {
+		t.Fatalf("health message = %q, want failed service container", reports[0].Message)
+	}
+	if len(reports[0].HostPorts) != 0 {
+		t.Fatalf("unhealthy service report must not advertise active routes: %#v", reports[0].HostPorts)
+	}
+}
+
+func TestCheckAllPodsReportsHealthyWhenDeclaredServicesAreRunning(t *testing.T) {
+	quadletDir := t.TempDir()
+	for _, name := range []string{"admiral-inst_1.pod", "admiral-inst_1-web.container", "admiral-inst_1-db.container"} {
+		if err := os.WriteFile(filepath.Join(quadletDir, name), []byte("[Unit]\n"), 0600); err != nil {
+			t.Fatalf("write Quadlet fixture %q: %v", name, err)
+		}
+	}
+	dataDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dataDir, "instances", "inst_1"), 0700); err != nil {
+		t.Fatalf("create instance data dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "instances", "inst_1", "ports.json"), []byte(`{"web":40001}`), 0600); err != nil {
+		t.Fatalf("write host-port metadata: %v", err)
+	}
+	t.Setenv("ADMIRAL_DATA_DIR", dataDir)
+
+	var reports []healthReport
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var report healthReport
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			t.Errorf("decode health report: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		reports = append(reports, report)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	agent := &Agent{
+		NodeID:     "node_1",
+		APIURL:     server.URL,
+		FleetToken: "test-token",
+		http:       server.Client(),
+		QuadletDir: quadletDir,
+		podmanRunner: healthProbePodmanRunner{
+			containerStatus: map[string]string{
+				"admiral-inst_1-web": "running",
+				"admiral-inst_1-db":  "running",
+			},
+		},
+	}
+	agent.checkAllPods(context.Background())
+
+	if len(reports) != 1 {
+		t.Fatalf("health reports = %d, want 1: %#v", len(reports), reports)
+	}
+	if reports[0].HealthStatus != "healthy" {
+		t.Fatalf("health status = %q, want healthy", reports[0].HealthStatus)
+	}
+	if reports[0].HostPorts["web"] != 40001 {
+		t.Fatalf("healthy report host ports = %#v, want web=40001", reports[0].HostPorts)
 	}
 }
