@@ -96,6 +96,16 @@ The `admiral-common` RPM creates the default per-UID Quadlet directory with
 mode `0755`. Fleet writes Quadlet files there and fails clearly if the
 package-managed directory is missing; it does not create or chmod that path.
 
+### Workload Health
+
+Fleet reconciles Podman pod and declared service-container state at startup and
+every five seconds. A stopped or missing declared service is therefore reported
+unhealthy within the next reconciliation interval, assuming the node can reach
+the control-plane API. Rootless systemd manager replacement invalidates the
+previous healthy observation immediately before Fleet probes runtime state
+again. This is a bounded detection interval, not instantaneous failure
+detection.
+
 ### Permissions & Capabilities
 
 To maintain rootless integrity, the following permissions are enforced:
