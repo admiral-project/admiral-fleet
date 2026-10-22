@@ -32,6 +32,8 @@ type healthReport struct {
 	CheckedAt    string         `json:"checked_at"`
 }
 
+const workloadHealthCheckInterval = 5 * time.Second
+
 func (a *Agent) StartHealthChecker(ctx context.Context) {
 	managerPID := ""
 	if a.rootlessManagerPID != nil {
@@ -44,7 +46,10 @@ func (a *Agent) StartHealthChecker(ctx context.Context) {
 	}
 	a.checkAllPods(ctx)
 
-	healthTicker := time.NewTicker(30 * time.Second)
+	// Keep the stale-health window for individual service failures bounded.
+	// The rootless manager PID does not change when one workload unit stops,
+	// so periodic Podman reconciliation must detect that transition promptly.
+	healthTicker := time.NewTicker(workloadHealthCheckInterval)
 	defer healthTicker.Stop()
 	managerTicker := time.NewTicker(2 * time.Second)
 	defer managerTicker.Stop()
