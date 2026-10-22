@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1086,6 +1087,120 @@ func TestCheckAllPodsReportsUnhealthyWhenDeclaredServiceIsMissing(t *testing.T) 
 	}
 	if len(reports[0].HostPorts) != 0 {
 		t.Fatalf("unhealthy service report must not advertise active routes: %#v", reports[0].HostPorts)
+	}
+}
+
+func TestReportUnavailableQuadletPodsMarksWorkloadsStopped(t *testing.T) {
+	quadletDir := t.TempDir()
+	for _, name := range []string{"admiral-inst_1.pod", "admiral-inst_2.pod"} {
+		if err := os.WriteFile(filepath.Join(quadletDir, name), []byte("[Pod]\n"), 0600); err != nil {
+			t.Fatalf("write Quadlet fixture %q: %v", name, err)
+		}
+	}
+
+	reports := make(map[string]healthReport)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var report healthReport
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			t.Errorf("decode health report: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		reports[report.InstanceID] = report
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	agent := &Agent{
+		NodeID:     "node_1",
+		APIURL:     server.URL,
+		FleetToken: "test-token",
+		http:       server.Client(),
+		QuadletDir: quadletDir,
+	}
+	agent.reportUnavailableQuadletPods(context.Background(), "user systemd manager restarted")
+
+	if len(reports) != 2 {
+		t.Fatalf("health reports = %d, want 2: %#v", len(reports), reports)
+	}
+	for _, instanceID := range []string{"inst_1", "inst_2"} {
+		report, ok := reports[instanceID]
+		if !ok {
+			t.Fatalf("missing health report for %s", instanceID)
+		}
+		if report.HealthStatus != "stopped" || report.Message != "user systemd manager restarted" {
+			t.Fatalf("health report for %s = %#v, want stopped with restart reason", instanceID, report)
+		}
+		if report.NodeID != "node_1" || report.BootID == "" {
+			t.Fatalf("health report identity incomplete: %#v", report)
+		}
+	}
+}
+
+func TestRootlessManagerChangeNeverLeavesWorkloadHealthyWithoutServices(t *testing.T) {
+	quadletDir := t.TempDir()
+	for _, name := range []string{"admiral-inst_1.pod", "admiral-inst_1-web.container", "admiral-inst_1-db.container"} {
+		if err := os.WriteFile(filepath.Join(quadletDir, name), []byte("[Unit]\n"), 0600); err != nil {
+			t.Fatalf("write Quadlet fixture %q: %v", name, err)
+		}
+	}
+
+	var reports []healthReport
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var report healthReport
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			t.Errorf("decode health report: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		reports = append(reports, report)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	agent := &Agent{
+		NodeID:     "node_1",
+		APIURL:     server.URL,
+		FleetToken: "test-token",
+		http:       server.Client(),
+		QuadletDir: quadletDir,
+		podmanRunner: healthProbePodmanRunner{
+			containerStatus: map[string]string{},
+		},
+	}
+	agent.refreshHealthAfterRootlessManagerChange(context.Background())
+
+	if len(reports) < 2 {
+		t.Fatalf("health reports = %d, want invalidation and fresh runtime observations", len(reports))
+	}
+	if reports[0].HealthStatus != "stopped" {
+		t.Fatalf("first report status = %q, want stopped invalidation", reports[0].HealthStatus)
+	}
+	for _, report := range reports {
+		if report.HealthStatus == "healthy" {
+			t.Fatalf("workload reported healthy without running service containers: %#v", report)
+		}
+	}
+}
+
+func TestReadRootlessManagerPID(t *testing.T) {
+	account, err := user.Current()
+	if err != nil {
+		t.Fatalf("get current test user: %v", err)
+	}
+	binDir := t.TempDir()
+	systemctl := filepath.Join(binDir, "systemctl")
+	if err := os.WriteFile(systemctl, []byte("#!/bin/sh\nprintf '12345\\n'\n"), 0700); err != nil {
+		t.Fatalf("write fake systemctl: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	pid, err := readRootlessManagerPID(context.Background(), account.Username)
+	if err != nil {
+		t.Fatalf("read rootless manager PID: %v", err)
+	}
+	if pid != "12345" {
+		t.Fatalf("manager PID = %q, want 12345", pid)
 	}
 }
 

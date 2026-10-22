@@ -48,6 +48,7 @@ type Agent struct {
 	replayMu              sync.Mutex
 	seenTasks             map[string]time.Time
 	podmanRunner          podman.Runner
+	rootlessManagerPID    func(context.Context) (string, error)
 }
 
 func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval, storageExceededAction, rootlessUser, quadletDir, taskPublicKeyHex string, exec executor.Executor, callbackKeys ...string) (*Agent, error) {
@@ -100,6 +101,9 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 		podmanRunner: podman.RemoteRunner{
 			RootlessUser: rootlessUser,
 			DataDir:      envOrDefault("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
+		},
+		rootlessManagerPID: func(ctx context.Context) (string, error) {
+			return readRootlessManagerPID(ctx, rootlessUser)
 		},
 	}, nil
 }

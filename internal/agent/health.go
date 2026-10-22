@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,17 +33,88 @@ type healthReport struct {
 }
 
 func (a *Agent) StartHealthChecker(ctx context.Context) {
+	managerPID := ""
+	if a.rootlessManagerPID != nil {
+		pid, err := a.rootlessManagerPID(ctx)
+		if err != nil {
+			slog.Warn("could not read rootless systemd manager PID", "node_id", a.NodeID, "error", err)
+		} else {
+			managerPID = pid
+		}
+	}
 	a.checkAllPods(ctx)
 
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	healthTicker := time.NewTicker(30 * time.Second)
+	defer healthTicker.Stop()
+	managerTicker := time.NewTicker(2 * time.Second)
+	defer managerTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-healthTicker.C:
 			a.checkAllPods(ctx)
+		case <-managerTicker.C:
+			if a.rootlessManagerPID == nil {
+				continue
+			}
+			pid, err := a.rootlessManagerPID(ctx)
+			if err != nil {
+				slog.Debug("could not read rootless systemd manager PID", "node_id", a.NodeID, "error", err)
+				continue
+			}
+			if pid == managerPID {
+				continue
+			}
+			previousPID := managerPID
+			managerPID = pid
+			slog.Info("rootless systemd manager changed; refreshing workload health", "node_id", a.NodeID, "previous_pid", previousPID, "manager_pid", pid)
+			a.refreshHealthAfterRootlessManagerChange(ctx)
+		}
+	}
+}
+
+func (a *Agent) refreshHealthAfterRootlessManagerChange(ctx context.Context) {
+	a.reportUnavailableQuadletPods(ctx, "rootless systemd manager changed; awaiting fresh workload health")
+	a.checkAllPods(ctx)
+}
+
+func readRootlessManagerPID(ctx context.Context, rootlessUser string) (string, error) {
+	account, err := user.Lookup(rootlessUser)
+	if err != nil {
+		return "", fmt.Errorf("lookup rootless user %q: %w", rootlessUser, err)
+	}
+	unit := "user@" + account.Uid + ".service"
+	commandCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(commandCtx, "systemctl", "show", unit, "--property=MainPID", "--value")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("read systemd manager PID for %s: %w", unit, err)
+	}
+	pid := strings.TrimSpace(string(output))
+	if pid == "" {
+		return "", fmt.Errorf("systemd manager PID for %s is empty", unit)
+	}
+	if _, err := strconv.Atoi(pid); err != nil {
+		return "", fmt.Errorf("systemd manager PID for %s is invalid: %q", unit, pid)
+	}
+	return pid, nil
+}
+
+func (a *Agent) reportUnavailableQuadletPods(ctx context.Context, message string) {
+	for _, instanceID := range a.listQuadletPodFiles() {
+		report := healthReport{
+			InstanceID:   instanceID,
+			NodeID:       a.NodeID,
+			BootID:       a.currentBootID(),
+			HealthStatus: "stopped",
+			Message:      message,
+			CheckedAt:    time.Now().UTC().Format(time.RFC3339),
+		}
+		if err := a.postHealth(report); err != nil {
+			slog.Warn("health report failed during rootless manager change", "instance_id", instanceID, "error", err)
 		}
 	}
 }
