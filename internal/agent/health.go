@@ -24,6 +24,7 @@ import (
 type healthReport struct {
 	InstanceID   string         `json:"instance_id"`
 	NodeID       string         `json:"node_id"`
+	BootID       string         `json:"boot_id"`
 	HealthStatus string         `json:"health_status"`
 	Message      string         `json:"message,omitempty"`
 	HostPorts    map[string]int `json:"host_ports,omitempty"`
@@ -75,6 +76,7 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 		report := healthReport{
 			InstanceID:   instanceID,
 			NodeID:       a.NodeID,
+			BootID:       a.currentBootID(),
 			HealthStatus: status,
 			Message:      msg,
 			CheckedAt:    time.Now().UTC().Format(time.RFC3339),
@@ -95,6 +97,7 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 			report := healthReport{
 				InstanceID:   instanceID,
 				NodeID:       a.NodeID,
+				BootID:       a.currentBootID(),
 				HealthStatus: "stopped",
 				Message:      "pod not running (Quadlet file exists but no pod found)",
 				CheckedAt:    time.Now().UTC().Format(time.RFC3339),

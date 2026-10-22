@@ -67,6 +67,7 @@ func (a *Agent) buildHeartbeat(ctx context.Context) admiral.HeartbeatRequest {
 
 	return admiral.HeartbeatRequest{
 		NodeID:        a.NodeID,
+		BootID:        a.currentBootID(),
 		Hostname:      hostname,
 		IP:            ip,
 		PodmanVersion: podmanV,
@@ -81,6 +82,30 @@ func (a *Agent) buildHeartbeat(ctx context.Context) admiral.HeartbeatRequest {
 		PodsPaused:    podsPaused,
 		PodsFailed:    podsFailed,
 	}
+}
+
+func (a *Agent) currentBootID() string {
+	if a.bootID != "" {
+		return a.bootID
+	}
+	bootID, err := readLinuxBootID()
+	if err != nil {
+		slog.Error("could not read Linux boot ID", "error", err, "node_id", a.NodeID)
+		return ""
+	}
+	return bootID
+}
+
+func readLinuxBootID() (string, error) {
+	data, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", err
+	}
+	bootID := strings.TrimSpace(string(data))
+	if bootID == "" {
+		return "", fmt.Errorf("kernel boot ID file is empty")
+	}
+	return bootID, nil
 }
 
 func (a *Agent) postHeartbeat(req admiral.HeartbeatRequest) error {

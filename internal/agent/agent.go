@@ -32,6 +32,7 @@ var ErrNoTaskAvailable = errors.New("no task available")
 
 type Agent struct {
 	NodeID                string
+	bootID                string
 	APIURL                string
 	FleetToken            string
 	CallbackKey           string
@@ -53,6 +54,10 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 	if err := tlsconfig.ValidateURLScheme(apiURL, "https"); err != nil {
 		return nil, err
 	}
+	bootID, err := readLinuxBootID()
+	if err != nil {
+		return nil, fmt.Errorf("read Linux boot ID: %w", err)
+	}
 	clientTLSConfig, err := tlsconfig.NewClientConfig(caCertFile)
 	if err != nil {
 		return nil, err
@@ -73,6 +78,7 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 	}
 	return &Agent{
 		NodeID:                nodeID,
+		bootID:                bootID,
 		APIURL:                apiURL,
 		FleetToken:            fleetToken,
 		CallbackKey:           callbackKey,

@@ -880,6 +880,9 @@ func TestBuildHeartbeat(t *testing.T) {
 	if hb.FleetVersion != FleetVersion {
 		t.Errorf("expected %q, got %q", FleetVersion, hb.FleetVersion)
 	}
+	if hb.BootID == "" {
+		t.Fatal("expected heartbeat to include the Linux boot ID")
+	}
 }
 
 func TestNewOutboxDefaultDir(t *testing.T) {
@@ -976,12 +979,14 @@ func TestPostHealth(t *testing.T) {
 	ag := &Agent{
 		APIURL:     server.URL,
 		FleetToken: "tok",
+		bootID:     "test-boot-id",
 		http:       server.Client(),
 	}
 
 	report := healthReport{
 		InstanceID:   "inst_1",
 		NodeID:       "node_1",
+		BootID:       "test-boot-id",
 		HealthStatus: "healthy",
 		CheckedAt:    "now",
 	}
@@ -990,6 +995,9 @@ func TestPostHealth(t *testing.T) {
 	}
 	if got.InstanceID != "inst_1" {
 		t.Fatalf("expected inst_1, got %q", got.InstanceID)
+	}
+	if got.BootID != "test-boot-id" {
+		t.Fatalf("expected boot ID test-boot-id, got %q", got.BootID)
 	}
 }
 
