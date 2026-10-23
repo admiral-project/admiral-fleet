@@ -1177,12 +1177,12 @@ func TestRootlessManagerChangeInvalidatesWithoutImmediateRuntimeProbe(t *testing
 	if reports[0].HealthStatus != "stopped" {
 		t.Fatalf("first report status = %q, want stopped invalidation", reports[0].HealthStatus)
 	}
-	if reports[0].Message != "rootless systemd manager changed; awaiting fresh workload health" {
+	if reports[0].Message != "rootless systemd manager active; awaiting fresh workload health" {
 		t.Fatalf("invalidation message = %q", reports[0].Message)
 	}
 }
 
-func TestRootlessManagerStopIsDetectedAndHealthProbeWaitsForRecoveryInterval(t *testing.T) {
+func TestRootlessManagerDeactivationInvalidatesAndWaitsForRecoveryInterval(t *testing.T) {
 	quadletDir := t.TempDir()
 	for _, name := range []string{"admiral-inst_1.pod", "admiral-inst_1-web.container", "admiral-inst_1-db.container"} {
 		if err := os.WriteFile(filepath.Join(quadletDir, name), []byte("[Unit]\n"), 0600); err != nil {
@@ -1203,8 +1203,8 @@ func TestRootlessManagerStopIsDetectedAndHealthProbeWaitsForRecoveryInterval(t *
 	}))
 	defer server.Close()
 
-	var managerPID atomic.Value
-	managerPID.Store("4778")
+	var managerStatus atomic.Value
+	managerStatus.Store(rootlessManagerStatus{PID: "4778", ActiveState: "active"})
 	agent := &Agent{
 		NodeID:     "node_1",
 		APIURL:     server.URL,
@@ -1217,8 +1217,8 @@ func TestRootlessManagerStopIsDetectedAndHealthProbeWaitsForRecoveryInterval(t *
 				"admiral-inst_1-db":  "running",
 			},
 		},
-		rootlessManagerPID: func(context.Context) (string, error) {
-			return managerPID.Load().(string), nil
+		rootlessManagerState: func(context.Context) (rootlessManagerStatus, error) {
+			return managerStatus.Load().(rootlessManagerStatus), nil
 		},
 	}
 
@@ -1246,23 +1246,50 @@ func TestRootlessManagerStopIsDetectedAndHealthProbeWaitsForRecoveryInterval(t *
 	}
 
 initialHealthReported:
-	managerPID.Store("0") // user@<uid>.service stopped during manager restart
+	managerStatus.Store(rootlessManagerStatus{PID: "4778", ActiveState: "deactivating"})
 	changeDeadline := time.After(2 * time.Second)
 	for {
 		select {
 		case report := <-reports:
-			if report.Message == "rootless systemd manager changed; awaiting fresh workload health" {
+			if report.Message == "rootless systemd manager unavailable; awaiting restart" {
 				if report.HealthStatus != "stopped" {
-					t.Fatalf("manager-change status = %q, want stopped", report.HealthStatus)
+					t.Fatalf("manager-deactivation status = %q, want stopped", report.HealthStatus)
 				}
-				goto managerInvalidated
+				goto managerUnavailable
 			}
 		case <-changeDeadline:
-			t.Fatal("manager stop was not detected within the watchdog bound")
+			t.Fatal("manager deactivation was not detected within the watchdog bound")
 		}
 	}
 
-managerInvalidated:
+managerUnavailable:
+	select {
+	case report := <-reports:
+		if report.HealthStatus == "healthy" {
+			t.Fatalf("health was restored while manager remained unavailable: %#v", report)
+		}
+	case <-time.After(rootlessManagerCheckInterval):
+	}
+
+	managerStatus.Store(rootlessManagerStatus{PID: "0", ActiveState: "inactive"})
+	managerStatus.Store(rootlessManagerStatus{PID: "5234", ActiveState: "activating"})
+	managerStatus.Store(rootlessManagerStatus{PID: "5234", ActiveState: "active"})
+	recoveryDeadline := time.After(2 * time.Second)
+	for {
+		select {
+		case report := <-reports:
+			if report.Message == "rootless systemd manager active; awaiting fresh workload health" {
+				if report.HealthStatus != "stopped" {
+					t.Fatalf("manager-recovery status = %q, want stopped", report.HealthStatus)
+				}
+				goto managerRecovered
+			}
+		case <-recoveryDeadline:
+			t.Fatal("manager recovery was not observed")
+		}
+	}
+
+managerRecovered:
 	select {
 	case report := <-reports:
 		if report.HealthStatus == "healthy" {
@@ -1272,24 +1299,24 @@ managerInvalidated:
 	}
 }
 
-func TestReadRootlessManagerPID(t *testing.T) {
+func TestReadRootlessManagerStatus(t *testing.T) {
 	account, err := user.Current()
 	if err != nil {
 		t.Fatalf("get current test user: %v", err)
 	}
 	binDir := t.TempDir()
 	systemctl := filepath.Join(binDir, "systemctl")
-	if err := os.WriteFile(systemctl, []byte("#!/bin/sh\nprintf '12345\\n'\n"), 0700); err != nil {
+	if err := os.WriteFile(systemctl, []byte("#!/bin/sh\nprintf 'MainPID=12345\\nActiveState=active\\n'\n"), 0700); err != nil {
 		t.Fatalf("write fake systemctl: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	pid, err := readRootlessManagerPID(context.Background(), account.Username)
+	status, err := readRootlessManagerStatus(context.Background(), account.Username)
 	if err != nil {
-		t.Fatalf("read rootless manager PID: %v", err)
+		t.Fatalf("read rootless manager status: %v", err)
 	}
-	if pid != "12345" {
-		t.Fatalf("manager PID = %q, want 12345", pid)
+	if status.PID != "12345" || status.ActiveState != "active" {
+		t.Fatalf("manager status = %#v, want active PID 12345", status)
 	}
 }
 

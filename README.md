@@ -101,11 +101,12 @@ package-managed directory is missing; it does not create or chmod that path.
 Fleet reconciles Podman pod and declared service-container state at startup and
 every five seconds. A stopped or missing declared service is therefore reported
 unhealthy within the next reconciliation interval, assuming the node can reach
-the control-plane API. Rootless systemd manager replacement invalidates the
-previous healthy observation immediately. Fleet waits for the next five-second
-reconciliation before publishing runtime state again, allowing Quadlet units to
-recover under the replacement manager. This is a bounded detection interval,
-not instantaneous failure detection.
+the control-plane API. Fleet checks the rootless systemd manager's `ActiveState`
+and PID every 500 ms; when it stops or changes, Fleet invalidates the previous
+healthy observation. Once the manager is active again, Fleet waits for the next
+five-second reconciliation before publishing runtime state, allowing Quadlet
+units to recover. This bounds detection latency but is not instantaneous failure
+detection.
 
 ### Permissions & Capabilities
 

@@ -35,17 +35,28 @@ type healthReport struct {
 const workloadHealthCheckInterval = 5 * time.Second
 const rootlessManagerCheckInterval = 500 * time.Millisecond
 
+type rootlessManagerStatus struct {
+	PID         string
+	ActiveState string
+}
+
 func (a *Agent) StartHealthChecker(ctx context.Context) {
-	managerPID := ""
-	if a.rootlessManagerPID != nil {
-		pid, err := a.rootlessManagerPID(ctx)
+	managerStatus := rootlessManagerStatus{}
+	managerAvailable := a.rootlessManagerState == nil
+	if a.rootlessManagerState != nil {
+		status, err := a.rootlessManagerState(ctx)
 		if err != nil {
-			slog.Warn("could not read rootless systemd manager PID", "node_id", a.NodeID, "error", err)
+			slog.Warn("could not read rootless systemd manager state", "node_id", a.NodeID, "error", err)
 		} else {
-			managerPID = pid
+			managerStatus = status
+			managerAvailable = status.ActiveState == "active" && status.PID != "0"
 		}
 	}
-	a.checkAllPods(ctx)
+	if managerAvailable {
+		a.checkAllPods(ctx)
+	} else {
+		a.reportUnavailableQuadletPods(ctx, "rootless systemd manager unavailable; awaiting restart")
+	}
 
 	// Keep the stale-health window for individual service failures bounded.
 	// The rootless manager PID does not change when one workload unit stops,
@@ -54,68 +65,101 @@ func (a *Agent) StartHealthChecker(ctx context.Context) {
 	defer healthTicker.Stop()
 	managerTicker := time.NewTicker(rootlessManagerCheckInterval)
 	defer managerTicker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-healthTicker.C:
-			a.checkAllPods(ctx)
-		case <-managerTicker.C:
-			if a.rootlessManagerPID == nil {
-				continue
+	observeManager := func() bool {
+		if a.rootlessManagerState == nil {
+			return true
+		}
+		status, err := a.rootlessManagerState(ctx)
+		if err != nil {
+			slog.Debug("could not read rootless systemd manager state", "node_id", a.NodeID, "error", err)
+			if managerAvailable {
+				managerAvailable = false
+				a.reportUnavailableQuadletPods(ctx, "rootless systemd manager state unavailable; awaiting recovery")
 			}
-			pid, err := a.rootlessManagerPID(ctx)
-			if err != nil {
-				slog.Debug("could not read rootless systemd manager PID", "node_id", a.NodeID, "error", err)
-				continue
+			return false
+		}
+		if status.ActiveState != "active" || status.PID == "0" {
+			if managerAvailable {
+				slog.Info("rootless systemd manager became unavailable; invalidating workload health", "node_id", a.NodeID, "manager_pid", status.PID, "manager_state", status.ActiveState)
+				managerStatus = status
+				managerAvailable = false
+				a.reportUnavailableQuadletPods(ctx, "rootless systemd manager unavailable; awaiting restart")
 			}
-			if pid == managerPID {
-				continue
-			}
-			previousPID := managerPID
-			managerPID = pid
-			slog.Info("rootless systemd manager changed; refreshing workload health", "node_id", a.NodeID, "previous_pid", previousPID, "manager_pid", pid)
+			return false
+		}
+		if !managerAvailable || status.PID != managerStatus.PID {
+			previousPID := managerStatus.PID
+			managerStatus = status
+			managerAvailable = true
+			slog.Info("rootless systemd manager active; awaiting fresh workload health", "node_id", a.NodeID, "previous_pid", previousPID, "manager_pid", status.PID)
 			a.refreshHealthAfterRootlessManagerChange(ctx)
-			// Do not immediately probe Podman after invalidation: during manager
-			// teardown/restart, runtime observations can still reflect the old
-			// manager generation. Keep workloads unavailable until a fresh
-			// reconciliation after the manager has had time to restore its units.
 			healthTicker.Stop()
 			select {
 			case <-healthTicker.C:
 			default:
 			}
 			healthTicker.Reset(workloadHealthCheckInterval)
+			return false
+		}
+		managerStatus = status
+		return true
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-healthTicker.C:
+			if observeManager() {
+				a.checkAllPods(ctx)
+			}
+		case <-managerTicker.C:
+			observeManager()
 		}
 	}
 }
 
 func (a *Agent) refreshHealthAfterRootlessManagerChange(ctx context.Context) {
-	a.reportUnavailableQuadletPods(ctx, "rootless systemd manager changed; awaiting fresh workload health")
+	a.reportUnavailableQuadletPods(ctx, "rootless systemd manager active; awaiting fresh workload health")
 }
 
-func readRootlessManagerPID(ctx context.Context, rootlessUser string) (string, error) {
+func readRootlessManagerStatus(ctx context.Context, rootlessUser string) (rootlessManagerStatus, error) {
 	account, err := user.Lookup(rootlessUser)
 	if err != nil {
-		return "", fmt.Errorf("lookup rootless user %q: %w", rootlessUser, err)
+		return rootlessManagerStatus{}, fmt.Errorf("lookup rootless user %q: %w", rootlessUser, err)
 	}
 	unit := "user@" + account.Uid + ".service"
 	commandCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(commandCtx, "systemctl", "show", unit, "--property=MainPID", "--value")
+	cmd := exec.CommandContext(commandCtx, "systemctl", "show", unit, "--property=MainPID", "--property=ActiveState", "--no-pager")
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("read systemd manager PID for %s: %w", unit, err)
+		return rootlessManagerStatus{}, fmt.Errorf("read systemd manager state for %s: %w", unit, err)
 	}
-	pid := strings.TrimSpace(string(output))
-	if pid == "" {
-		return "", fmt.Errorf("systemd manager PID for %s is empty", unit)
+	var status rootlessManagerStatus
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "MainPID":
+			status.PID = strings.TrimSpace(value)
+		case "ActiveState":
+			status.ActiveState = strings.TrimSpace(value)
+		}
 	}
-	if _, err := strconv.Atoi(pid); err != nil {
-		return "", fmt.Errorf("systemd manager PID for %s is invalid: %q", unit, pid)
+	if status.PID == "" {
+		return rootlessManagerStatus{}, fmt.Errorf("systemd manager PID for %s is empty", unit)
 	}
-	return pid, nil
+	pid, err := strconv.Atoi(status.PID)
+	if err != nil || pid < 0 {
+		return rootlessManagerStatus{}, fmt.Errorf("systemd manager PID for %s is invalid: %q", unit, status.PID)
+	}
+	if status.ActiveState == "" {
+		return rootlessManagerStatus{}, fmt.Errorf("systemd manager active state for %s is empty", unit)
+	}
+	return status, nil
 }
 
 func (a *Agent) reportUnavailableQuadletPods(ctx context.Context, message string) {
