@@ -33,6 +33,7 @@ type healthReport struct {
 }
 
 const workloadHealthCheckInterval = 5 * time.Second
+const rootlessManagerCheckInterval = 500 * time.Millisecond
 
 func (a *Agent) StartHealthChecker(ctx context.Context) {
 	managerPID := ""
@@ -51,7 +52,7 @@ func (a *Agent) StartHealthChecker(ctx context.Context) {
 	// so periodic Podman reconciliation must detect that transition promptly.
 	healthTicker := time.NewTicker(workloadHealthCheckInterval)
 	defer healthTicker.Stop()
-	managerTicker := time.NewTicker(2 * time.Second)
+	managerTicker := time.NewTicker(rootlessManagerCheckInterval)
 	defer managerTicker.Stop()
 
 	for {
@@ -76,13 +77,22 @@ func (a *Agent) StartHealthChecker(ctx context.Context) {
 			managerPID = pid
 			slog.Info("rootless systemd manager changed; refreshing workload health", "node_id", a.NodeID, "previous_pid", previousPID, "manager_pid", pid)
 			a.refreshHealthAfterRootlessManagerChange(ctx)
+			// Do not immediately probe Podman after invalidation: during manager
+			// teardown/restart, runtime observations can still reflect the old
+			// manager generation. Keep workloads unavailable until a fresh
+			// reconciliation after the manager has had time to restore its units.
+			healthTicker.Stop()
+			select {
+			case <-healthTicker.C:
+			default:
+			}
+			healthTicker.Reset(workloadHealthCheckInterval)
 		}
 	}
 }
 
 func (a *Agent) refreshHealthAfterRootlessManagerChange(ctx context.Context) {
 	a.reportUnavailableQuadletPods(ctx, "rootless systemd manager changed; awaiting fresh workload health")
-	a.checkAllPods(ctx)
 }
 
 func readRootlessManagerPID(ctx context.Context, rootlessUser string) (string, error) {

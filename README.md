@@ -102,9 +102,10 @@ Fleet reconciles Podman pod and declared service-container state at startup and
 every five seconds. A stopped or missing declared service is therefore reported
 unhealthy within the next reconciliation interval, assuming the node can reach
 the control-plane API. Rootless systemd manager replacement invalidates the
-previous healthy observation immediately before Fleet probes runtime state
-again. This is a bounded detection interval, not instantaneous failure
-detection.
+previous healthy observation immediately. Fleet waits for the next five-second
+reconciliation before publishing runtime state again, allowing Quadlet units to
+recover under the replacement manager. This is a bounded detection interval,
+not instantaneous failure detection.
 
 ### Permissions & Capabilities
 

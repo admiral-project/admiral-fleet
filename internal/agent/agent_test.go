@@ -19,6 +19,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1137,7 +1138,7 @@ func TestReportUnavailableQuadletPodsMarksWorkloadsStopped(t *testing.T) {
 	}
 }
 
-func TestRootlessManagerChangeNeverLeavesWorkloadHealthyWithoutServices(t *testing.T) {
+func TestRootlessManagerChangeInvalidatesWithoutImmediateRuntimeProbe(t *testing.T) {
 	quadletDir := t.TempDir()
 	for _, name := range []string{"admiral-inst_1.pod", "admiral-inst_1-web.container", "admiral-inst_1-db.container"} {
 		if err := os.WriteFile(filepath.Join(quadletDir, name), []byte("[Unit]\n"), 0600); err != nil {
@@ -1170,16 +1171,104 @@ func TestRootlessManagerChangeNeverLeavesWorkloadHealthyWithoutServices(t *testi
 	}
 	agent.refreshHealthAfterRootlessManagerChange(context.Background())
 
-	if len(reports) < 2 {
-		t.Fatalf("health reports = %d, want invalidation and fresh runtime observations", len(reports))
+	if len(reports) != 1 {
+		t.Fatalf("health reports = %d, want only the invalidation report", len(reports))
 	}
 	if reports[0].HealthStatus != "stopped" {
 		t.Fatalf("first report status = %q, want stopped invalidation", reports[0].HealthStatus)
 	}
-	for _, report := range reports {
-		if report.HealthStatus == "healthy" {
-			t.Fatalf("workload reported healthy without running service containers: %#v", report)
+	if reports[0].Message != "rootless systemd manager changed; awaiting fresh workload health" {
+		t.Fatalf("invalidation message = %q", reports[0].Message)
+	}
+}
+
+func TestRootlessManagerStopIsDetectedAndHealthProbeWaitsForRecoveryInterval(t *testing.T) {
+	quadletDir := t.TempDir()
+	for _, name := range []string{"admiral-inst_1.pod", "admiral-inst_1-web.container", "admiral-inst_1-db.container"} {
+		if err := os.WriteFile(filepath.Join(quadletDir, name), []byte("[Unit]\n"), 0600); err != nil {
+			t.Fatalf("write Quadlet fixture %q: %v", name, err)
 		}
+	}
+
+	reports := make(chan healthReport, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var report healthReport
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			t.Errorf("decode health report: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		reports <- report
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	var managerPID atomic.Value
+	managerPID.Store("4778")
+	agent := &Agent{
+		NodeID:     "node_1",
+		APIURL:     server.URL,
+		FleetToken: "test-token",
+		http:       server.Client(),
+		QuadletDir: quadletDir,
+		podmanRunner: healthProbePodmanRunner{
+			containerStatus: map[string]string{
+				"admiral-inst_1-web": "running",
+				"admiral-inst_1-db":  "running",
+			},
+		},
+		rootlessManagerPID: func(context.Context) (string, error) {
+			return managerPID.Load().(string), nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		agent.StartHealthChecker(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	initialDeadline := time.After(2 * time.Second)
+	for {
+		select {
+		case report := <-reports:
+			if report.HealthStatus == "healthy" {
+				goto initialHealthReported
+			}
+		case <-initialDeadline:
+			t.Fatal("initial healthy workload observation was not reported")
+		}
+	}
+
+initialHealthReported:
+	managerPID.Store("0") // user@<uid>.service stopped during manager restart
+	changeDeadline := time.After(2 * time.Second)
+	for {
+		select {
+		case report := <-reports:
+			if report.Message == "rootless systemd manager changed; awaiting fresh workload health" {
+				if report.HealthStatus != "stopped" {
+					t.Fatalf("manager-change status = %q, want stopped", report.HealthStatus)
+				}
+				goto managerInvalidated
+			}
+		case <-changeDeadline:
+			t.Fatal("manager stop was not detected within the watchdog bound")
+		}
+	}
+
+managerInvalidated:
+	select {
+	case report := <-reports:
+		if report.HealthStatus == "healthy" {
+			t.Fatalf("health was restored before the post-restart reconciliation interval: %#v", report)
+		}
+	case <-time.After(rootlessManagerCheckInterval):
 	}
 }
 
