@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,9 +30,13 @@ import (
 type healthProbePodmanRunner struct {
 	failedContainers map[string]error
 	containerStatus  map[string]string
+	healthCheckError error
 }
 
 func (r healthProbePodmanRunner) Run(_ context.Context, _ string, args ...string) ([]byte, error) {
+	if len(args) >= 2 && args[0] == "exec" {
+		return nil, r.healthCheckError
+	}
 	if len(args) >= 3 && args[0] == "pod" && args[1] == "ps" {
 		return []byte("admiral-inst_1\tRunning\n"), nil
 	}
@@ -1372,5 +1377,102 @@ func TestCheckAllPodsReportsHealthyWhenDeclaredServicesAreRunning(t *testing.T) 
 	}
 	if reports[0].HostPorts["web"] != 40001 {
 		t.Fatalf("healthy report host ports = %#v, want web=40001", reports[0].HostPorts)
+	}
+}
+
+func TestCheckAllPodsReportsUnhealthyWhenDeclaredHealthCheckFails(t *testing.T) {
+	quadletDir := t.TempDir()
+	for _, name := range []string{"admiral-inst_1.pod", "admiral-inst_1-web.container", "admiral-inst_1-db.container"} {
+		if err := os.WriteFile(filepath.Join(quadletDir, name), []byte("[Unit]\n"), 0600); err != nil {
+			t.Fatalf("write Quadlet fixture %q: %v", name, err)
+		}
+	}
+	dataDir := t.TempDir()
+	instanceDir := filepath.Join(dataDir, "instances", "inst_1")
+	if err := os.MkdirAll(instanceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	checks, err := json.Marshal([]admiral.ServiceHealthCheck{{
+		ServiceName: "db",
+		HealthCheck: admiral.YAMLHealthCheck{Type: "command", Command: []string{"pg_isready"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instanceDir, "healthchecks.json"), checks, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var reports []healthReport
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var report healthReport
+		if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
+			t.Errorf("decode health report: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		reports = append(reports, report)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	agent := &Agent{
+		NodeID:     "node_1",
+		APIURL:     server.URL,
+		FleetToken: "test-token",
+		http:       server.Client(),
+		QuadletDir: quadletDir,
+		DataDir:    dataDir,
+		podmanRunner: healthProbePodmanRunner{
+			containerStatus: map[string]string{
+				"admiral-inst_1-web": "running",
+				"admiral-inst_1-db":  "running",
+			},
+			healthCheckError: errors.New("connection refused; sensitive command output must not be reported"),
+		},
+	}
+	agent.checkAllPods(context.Background())
+
+	if len(reports) != 1 {
+		t.Fatalf("health reports = %d, want 1: %#v", len(reports), reports)
+	}
+	if reports[0].HealthStatus != "unhealthy" || !strings.Contains(reports[0].Message, `service "db" health check failed`) {
+		t.Fatalf("health report = %#v, want failed DB health check", reports[0])
+	}
+	if strings.Contains(reports[0].Message, "sensitive") || len(reports[0].HostPorts) != 0 {
+		t.Fatalf("health report leaked check output or advertised routes: %#v", reports[0])
+	}
+}
+
+func TestRunDeclaredServiceHTTPHealthCheck(t *testing.T) {
+	tests := []struct {
+		name           string
+		status         int
+		expectedStatus int
+		wantErr        bool
+	}{
+		{name: "expected status", status: http.StatusNoContent, expectedStatus: http.StatusNoContent},
+		{name: "unexpected status", status: http.StatusServiceUnavailable, expectedStatus: http.StatusOK, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+			}))
+			defer server.Close()
+			port, err := strconv.Atoi(server.URL[strings.LastIndex(server.URL, ":")+1:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			agent := &Agent{}
+			check := admiral.ServiceHealthCheck{
+				ServiceName: "web",
+				HostPort:    port,
+				HealthCheck: admiral.YAMLHealthCheck{Type: "http", Path: "/health", ExpectedStatus: tt.expectedStatus},
+			}
+			err = agent.runDeclaredServiceHealthCheck(context.Background(), "inst_1", check)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("health check error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
 	}
 }

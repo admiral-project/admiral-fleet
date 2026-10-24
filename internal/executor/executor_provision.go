@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -39,6 +40,11 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		result.Success = true
 		result.Logs = fmt.Sprintf("instance %s already provisioned (pod %q exists)", task.InstanceID, podName)
 		hostPorts := e.loadHostPorts(e.DataDir, task.InstanceID)
+		if err := e.writeServiceHealthChecks(task.InstanceID, task.Services, hostPorts); err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("persist service health checks for instance %q: %v", task.InstanceID, err)
+			return result
+		}
 		hostPortsJSON, _ := json.Marshal(hostPorts)
 		hasSetup := taskHasSetup(task)
 		if hasSetup && task.SetupCompleted {
@@ -57,6 +63,11 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 	if err != nil {
 		result.Success = false
 		result.Error = fmt.Sprintf("allocate host ports for instance %q: %v", task.InstanceID, err)
+		return result
+	}
+	if err := e.writeServiceHealthChecks(task.InstanceID, task.Services, ports); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("persist service health checks for instance %q: %v", task.InstanceID, err)
 		return result
 	}
 	slog.Info("provision: host ports allocated", "instance", task.InstanceID, "ports", ports)
@@ -156,7 +167,6 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		}
 	}
 	hostPortsJSON, _ := json.Marshal(hostPorts)
-
 	// Execute setup_command for each service that declares one.
 	// These are one-time initialization commands run via podman exec
 	// after the containers are up. Setup runs after all services have
@@ -285,6 +295,43 @@ func (e *SystemdPodmanExecutor) writeSetupMarker(instanceID string) {
 		return
 	}
 	_ = e.writeFileNoFollow(setupMarkerPath(e.DataDir, instanceID), []byte("done"), 0600)
+}
+
+func serviceHealthChecksPath(dataDir, instanceID string) string {
+	return filepath.Join(dataDir, "instances", instanceID, "healthchecks.json")
+}
+
+func (e *SystemdPodmanExecutor) writeServiceHealthChecks(instanceID string, services []admiral.ServiceInfo, hostPorts map[string]int) error {
+	if err := security.ValidateInstanceID(instanceID); err != nil {
+		return fmt.Errorf("invalid instance_id: %w", err)
+	}
+	checks := make([]admiral.ServiceHealthCheck, 0, len(services))
+	for _, svc := range services {
+		if svc.HealthCheck == nil {
+			continue
+		}
+		check := *svc.HealthCheck
+		checks = append(checks, admiral.ServiceHealthCheck{
+			ServiceName: svc.Name,
+			HealthCheck: check,
+			HostPort:    hostPorts[svc.Name],
+		})
+	}
+	path := serviceHealthChecksPath(e.DataDir, instanceID)
+	if len(checks) == 0 {
+		if err := e.FS.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale health check metadata: %w", err)
+		}
+		return nil
+	}
+	data, err := json.Marshal(checks)
+	if err != nil {
+		return fmt.Errorf("encode service health checks: %w", err)
+	}
+	if err := e.writeFileNoFollow(path, data, 0600); err != nil {
+		return fmt.Errorf("write service health checks: %w", err)
+	}
+	return nil
 }
 
 // runSetupCommands executes the setup_command declared on each service

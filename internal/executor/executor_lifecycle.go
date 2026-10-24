@@ -39,6 +39,11 @@ func (e *SystemdPodmanExecutor) start(ctx context.Context, task admiral.FleetTas
 	}
 
 	ports := e.loadHostPorts(e.DataDir, task.InstanceID)
+	if err := e.writeServiceHealthChecks(task.InstanceID, task.Services, ports); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("persist service health checks on start for instance %q: %v", task.InstanceID, err)
+		return result
+	}
 	r := e.renderer()
 	r.HostPorts = ports
 	if err := r.Render(task); err != nil {
@@ -162,6 +167,12 @@ func (e *SystemdPodmanExecutor) resize(ctx context.Context, task admiral.FleetTa
 
 	// Re-render Quadlet with updated tier limits
 	ports := e.loadHostPorts(e.DataDir, task.InstanceID)
+	if err := e.writeServiceHealthChecks(task.InstanceID, task.Services, ports); err != nil {
+		rollbackError := restoreOnFailure()
+		result.Success = false
+		result.Error = fmt.Sprintf("persist service health checks on resize for instance %q: %v%s", task.InstanceID, err, rollbackError)
+		return result
+	}
 	r := e.renderer()
 	r.HostPorts = ports
 	if err := r.Render(task); err != nil {

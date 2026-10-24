@@ -5,8 +5,13 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/osutil"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
@@ -26,6 +31,46 @@ func TestSimulatedExecutorSucceedsForKnownAction(t *testing.T) {
 	}
 	if res.OperationID != "op_1" || res.TaskID != "task_1" {
 		t.Fatalf("result did not preserve identifiers: %+v", res)
+	}
+}
+
+func TestWriteServiceHealthChecksPersistsOnlyCheckMetadata(t *testing.T) {
+	dataDir := t.TempDir()
+	instanceDir := filepath.Join(dataDir, "instances", "inst_1")
+	if err := os.MkdirAll(instanceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	exec := &SystemdPodmanExecutor{DataDir: dataDir, FS: osutil.RealFileSystem{}}
+	service := admiral.ServiceInfo{
+		Name:        "db",
+		Env:         map[string]string{"POSTGRES_PASSWORD": "do-not-persist"},
+		Secrets:     map[string]string{"DB_PASSWORD": "also-do-not-persist"},
+		HealthCheck: &admiral.YAMLHealthCheck{Type: "command", Command: []string{"pg_isready"}, TimeoutSeconds: 3},
+	}
+	if err := exec.writeServiceHealthChecks("inst_1", []admiral.ServiceInfo{service}, map[string]int{"db": 40001}); err != nil {
+		t.Fatalf("write service health checks: %v", err)
+	}
+	path := serviceHealthChecksPath(dataDir, "inst_1")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read persisted health checks: %v", err)
+	}
+	if string(data) == "" || strings.Contains(string(data), "do-not-persist") || strings.Contains(string(data), "also-do-not-persist") {
+		t.Fatalf("health check metadata contains secrets or is empty: %s", data)
+	}
+	var checks []admiral.ServiceHealthCheck
+	if err := json.Unmarshal(data, &checks); err != nil {
+		t.Fatalf("decode health check metadata: %v", err)
+	}
+	if len(checks) != 1 || checks[0].ServiceName != "db" || checks[0].HostPort != 40001 || checks[0].HealthCheck.Type != "command" {
+		t.Fatalf("persisted checks = %#v", checks)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("health check metadata mode = %04o, want 0600", got)
 	}
 }
 

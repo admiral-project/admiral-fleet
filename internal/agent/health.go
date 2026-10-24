@@ -8,8 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -19,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
@@ -202,6 +205,9 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 		} else if healthy, serviceMessage := checkInstanceServiceContainers(a.QuadletDir, instanceID, containerStates, containerErr); !healthy {
 			status = "unhealthy"
 			msg = serviceMessage
+		} else if healthy, serviceMessage := a.checkDeclaredServiceHealth(ctx, instanceID); !healthy {
+			status = "unhealthy"
+			msg = serviceMessage
 		}
 
 		report := healthReport{
@@ -237,6 +243,96 @@ func (a *Agent) checkAllPods(ctx context.Context) {
 				slog.Warn("health report failed", "instance_id", report.InstanceID, "error", err)
 			}
 		}
+	}
+}
+
+func (a *Agent) checkDeclaredServiceHealth(ctx context.Context, instanceID string) (bool, string) {
+	dataDir := strings.TrimSpace(a.DataDir)
+	if dataDir == "" {
+		dataDir = envOrDefault("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral")
+	}
+	if err := security.ValidateInstanceID(instanceID); err != nil {
+		return false, "invalid workload identity for service health checks"
+	}
+	data, err := os.ReadFile(filepath.Join(dataDir, "instances", instanceID, "healthchecks.json"))
+	if os.IsNotExist(err) {
+		return true, ""
+	}
+	if err != nil {
+		return false, "failed to read declared service health checks"
+	}
+	var checks []admiral.ServiceHealthCheck
+	if err := json.Unmarshal(data, &checks); err != nil {
+		return false, "failed to parse declared service health checks"
+	}
+	for _, check := range checks {
+		if err := a.runDeclaredServiceHealthCheck(ctx, instanceID, check); err != nil {
+			return false, fmt.Sprintf("service %q health check failed", check.ServiceName)
+		}
+	}
+	return true, ""
+}
+
+func (a *Agent) runDeclaredServiceHealthCheck(ctx context.Context, instanceID string, check admiral.ServiceHealthCheck) error {
+	if strings.TrimSpace(check.ServiceName) == "" {
+		return fmt.Errorf("service name is empty")
+	}
+	timeout := 5 * time.Second
+	if check.HealthCheck.TimeoutSeconds > 0 {
+		timeout = time.Duration(check.HealthCheck.TimeoutSeconds) * time.Second
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	switch strings.ToLower(strings.TrimSpace(check.HealthCheck.Type)) {
+	case "", "none":
+		return nil
+	case "command":
+		if len(check.HealthCheck.Command) == 0 {
+			return fmt.Errorf("command health check is empty")
+		}
+		args := []string{"exec", "admiral-" + instanceID + "-" + check.ServiceName}
+		args = append(args, check.HealthCheck.Command...)
+		if _, err := a.runPodman(checkCtx, args...); err != nil {
+			return fmt.Errorf("run service command health check: %w", err)
+		}
+		return nil
+	case "tcp":
+		if check.HostPort <= 0 {
+			return fmt.Errorf("TCP health check has no published port")
+		}
+		conn, err := (&net.Dialer{Timeout: timeout}).DialContext(checkCtx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(check.HostPort)))
+		if err != nil {
+			return err
+		}
+		return conn.Close()
+	case "http":
+		if check.HostPort <= 0 {
+			return fmt.Errorf("HTTP health check has no published port")
+		}
+		path := check.HealthCheck.Path
+		if path == "" {
+			path = "/"
+		}
+		request, err := http.NewRequestWithContext(checkCtx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", check.HostPort, path), nil)
+		if err != nil {
+			return fmt.Errorf("create HTTP health check request: %w", err)
+		}
+		response, err := (&http.Client{Timeout: timeout}).Do(request)
+		if err != nil {
+			return err
+		}
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+		expected := check.HealthCheck.ExpectedStatus
+		if expected == 0 {
+			expected = http.StatusOK
+		}
+		if response.StatusCode != expected {
+			return fmt.Errorf("HTTP health check returned %d, expected %d", response.StatusCode, expected)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported health check type %q", check.HealthCheck.Type)
 	}
 }
 

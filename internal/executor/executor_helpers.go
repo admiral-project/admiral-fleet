@@ -149,7 +149,7 @@ func (e *SystemdPodmanExecutor) chownInstanceData(instanceID string) error {
 		return err
 	}
 	// Re-own control files to root so the workload cannot modify them.
-	for _, name := range []string{"ports.json", "tier.json", "setup_done"} {
+	for _, name := range []string{"ports.json", "tier.json", "setup_done", "healthchecks.json"} {
 		fp := filepath.Join(instDir, name)
 		if info, err := e.FS.Stat(fp); err == nil && !info.IsDir() {
 			_ = e.chownForRootless(fp, info, 0, 0)

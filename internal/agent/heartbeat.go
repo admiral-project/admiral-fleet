@@ -169,9 +169,13 @@ func (a *Agent) detectPodmanVersion(ctx context.Context) string {
 
 func (a *Agent) runPodman(ctx context.Context, args ...string) ([]byte, error) {
 	if a.podmanRunner == nil {
+		dataDir := strings.TrimSpace(a.DataDir)
+		if dataDir == "" {
+			dataDir = envOrDefault("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral")
+		}
 		a.podmanRunner = podman.RemoteRunner{
 			RootlessUser: a.RootlessUser,
-			DataDir:      envOrDefault("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
+			DataDir:      dataDir,
 		}
 	}
 	return a.podmanRunner.Run(ctx, "podman", args...)

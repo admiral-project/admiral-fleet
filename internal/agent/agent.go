@@ -41,6 +41,7 @@ type Agent struct {
 	ImagePullInterval     string
 	RootlessUser          string
 	QuadletDir            string
+	DataDir               string
 	taskPublicKey         ed25519.PublicKey
 	executor              executor.Executor
 	http                  *http.Client
@@ -88,6 +89,7 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 		ImagePullInterval:     envOrDefault("ADMIRAL_FLEET_IMAGE_PULL_INTERVAL", "1h"),
 		RootlessUser:          rootlessUser,
 		QuadletDir:            quadletDir,
+		DataDir:               envOrDefault("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
 		taskPublicKey:         taskPublicKey,
 		executor:              exec,
 		http: &http.Client{
