@@ -171,6 +171,18 @@ func (f fakeFS) Walk(root string, walkFn filepath.WalkFunc) error {
 	return filepath.Walk(root, walkFn)
 }
 
+type tierMetadataWriteFailureFS struct {
+	fakeFS
+	target string
+}
+
+func (f tierMetadataWriteFailureFS) OpenFile(name string, flag int, perm os.FileMode) (*os.File, error) {
+	if name == f.target {
+		return nil, errors.New("injected tier metadata write failure")
+	}
+	return f.fakeFS.OpenFile(name, flag, perm)
+}
+
 type fakeUserLookup struct{}
 
 func (f fakeUserLookup) Lookup(_ string) (*user.User, error) {
@@ -1128,6 +1140,44 @@ func TestSystemdPodmanExecutorProvisionFailsAndCleansUpWhenDeclaredServiceIsMiss
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("partial provisioning resource %q should be removed, stat error=%v", path, err)
 		}
+	}
+}
+
+func TestSystemdPodmanExecutorFailsBeforeRenderingWhenTierMetadataCannotBeWritten(t *testing.T) {
+	quadletDir := testPackageManagedQuadletDir(t)
+	dataDir := testPackageManagedDataDir(t)
+	instanceID := "tierwrite"
+	metadataPath := filepath.Join(dataDir, "instances", instanceID, "tier.json")
+	filesystem := tierMetadataWriteFailureFS{fakeFS: fakeFS{}, target: metadataPath}
+	systemdRunner := &fakeSystemdRunner{}
+	podmanRunner := &fakePodmanRunner{overrides: map[string]fakeOverride{
+		"missing pod": {
+			contains: "podman pod exists admiral-tierwrite",
+			err:      os.ErrNotExist,
+		},
+	}}
+	exec := NewSystemdPodmanWithFS(systemd.NewManager(systemdRunner), podman.NewInspector(podmanRunner), quadletDir, dataDir, "nobody", filesystem, fakeUserLookup{})
+	result := exec.Execute(context.Background(), admiral.FleetTask{
+		TaskID:     "task_tier_metadata_failure",
+		NodeID:     "node_1",
+		Action:     admiral.ActionProvisionApp,
+		InstanceID: instanceID,
+		Tier: admiral.TierInfo{
+			CPU:     1,
+			Memory:  "512MiB",
+			Storage: "1GiB",
+		},
+		Services: []admiral.ServiceInfo{{Name: "web", Image: "docker.io/library/nginx:1.27"}},
+	}, "node_1")
+
+	if result.Success || !strings.Contains(result.Error, "write instance tier metadata") {
+		t.Fatalf("expected an explicit tier metadata write failure, got success=%v error=%q", result.Success, result.Error)
+	}
+	if len(systemdRunner.calls) != 0 {
+		t.Fatalf("must not start systemd units when tier metadata is unavailable, calls=%v", systemdRunner.calls)
+	}
+	if _, err := os.Stat(filepath.Join(quadletDir, "admiral-tierwrite.pod")); !os.IsNotExist(err) {
+		t.Fatalf("must not render a pod unit before tier metadata is persisted, stat error=%v", err)
 	}
 }
 

@@ -60,6 +60,12 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 		return result
 	}
 	slog.Info("provision: host ports allocated", "instance", task.InstanceID, "ports", ports)
+	if err := e.writeInstanceTierInfo(e.DataDir, task.InstanceID, task.Tier); err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("write instance tier metadata for %q: %v", task.InstanceID, err)
+		slog.Error("provision: tier metadata write failed", "instance", task.InstanceID, "error", err)
+		return result
+	}
 	r := e.renderer()
 	slog.Info("provision: renderer configured", "instance", task.InstanceID, "quadlet_dir", r.QuadletDir, "data_dir", r.DataDir)
 	r.HostPorts = ports
@@ -121,8 +127,6 @@ func (e *SystemdPodmanExecutor) provision(ctx context.Context, task admiral.Flee
 			return result
 		}
 	}
-	e.writeInstanceTierInfo(e.DataDir, task.InstanceID, task.Tier)
-
 	hostPorts := make(map[string]int)
 	for _, svc := range task.Services {
 		if svc.Port > 0 {
@@ -552,10 +556,10 @@ func validateProvisionTask(task admiral.FleetTask) error {
 	return nil
 }
 
-func (e *SystemdPodmanExecutor) writeInstanceTierInfo(dataDir, instanceID string, tier admiral.TierInfo) {
+func (e *SystemdPodmanExecutor) writeInstanceTierInfo(dataDir, instanceID string, tier admiral.TierInfo) error {
 	dir := filepath.Join(dataDir, "instances", instanceID)
 	if err := e.FS.MkdirAll(dir, 0700); err != nil {
-		return
+		return fmt.Errorf("create instance data directory %q: %w", dir, err)
 	}
 	info := map[string]interface{}{
 		"cpu":     tier.CPU,
@@ -564,9 +568,13 @@ func (e *SystemdPodmanExecutor) writeInstanceTierInfo(dataDir, instanceID string
 	}
 	data, err := json.Marshal(info)
 	if err != nil {
-		return
+		return fmt.Errorf("marshal tier metadata: %w", err)
 	}
-	_ = e.writeFileNoFollow(filepath.Join(dir, "tier.json"), data, 0600)
+	path := filepath.Join(dir, "tier.json")
+	if err := e.writeFileNoFollow(path, data, 0600); err != nil {
+		return fmt.Errorf("write tier metadata file %q: %w", path, err)
+	}
+	return nil
 }
 
 const minHostPort = 40000
