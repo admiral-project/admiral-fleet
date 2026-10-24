@@ -6,12 +6,17 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/admiral-project/admiral/admiral-fleet/internal/osutil"
+	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
@@ -105,5 +110,44 @@ func TestPublishedHealthcheckAddressDefaultsToLoopback(t *testing.T) {
 	}
 	if got := exec.publishedHealthcheckAddress(40000); got != "127.0.0.1:40000" {
 		t.Fatalf("published healthcheck address = %q, want %q", got, "127.0.0.1:40000")
+	}
+}
+
+func TestServiceHTTPHealthCheckDoesNotFollowRedirects(t *testing.T) {
+	var targetRequests int
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetRequests++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+	port, err := strconv.Atoi(source.URL[strings.LastIndex(source.URL, ":")+1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	podmanRunner := &fakePodmanRunner{overrides: map[string]fakeOverride{
+		"container inspect admiral-demo001-db": {output: []byte(`[{"Name":"admiral-demo001-db","State":{"Status":"running"}}]`)},
+	}}
+	service := admiral.ServiceInfo{
+		Name: "db",
+		HealthCheck: &admiral.YAMLHealthCheck{
+			Type:           "http",
+			Path:           "/health",
+			ExpectedStatus: http.StatusOK,
+		},
+	}
+	exec := &SystemdPodmanExecutor{
+		Podman:   podman.NewInspector(podmanRunner),
+		Renderer: &quadlet.Renderer{},
+	}
+	ready, err := exec.serviceReadyCheck(context.Background(), "demo001", "admiral-demo001-db", service, map[string]int{"db": port}, 5*time.Second)
+	if ready || err == nil {
+		t.Fatalf("redirect health check = ready %t, error %v; want failure", ready, err)
+	}
+	if targetRequests != 0 {
+		t.Fatalf("provision health check followed redirect and contacted target %d times", targetRequests)
 	}
 }

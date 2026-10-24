@@ -523,7 +523,13 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 		if err != nil {
 			return false, err
 		}
-		resp, err := (&http.Client{Timeout: timeout}).Do(req)
+		client := &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			return false, err
 		}

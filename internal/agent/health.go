@@ -317,7 +317,13 @@ func (a *Agent) runDeclaredServiceHealthCheck(ctx context.Context, instanceID st
 		if err != nil {
 			return fmt.Errorf("create HTTP health check request: %w", err)
 		}
-		response, err := (&http.Client{Timeout: timeout}).Do(request)
+		client := &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		response, err := client.Do(request)
 		if err != nil {
 			return err
 		}

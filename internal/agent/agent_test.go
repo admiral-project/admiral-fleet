@@ -1476,3 +1476,32 @@ func TestRunDeclaredServiceHTTPHealthCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestRunDeclaredServiceHTTPHealthCheckDoesNotFollowRedirects(t *testing.T) {
+	var targetRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetRequests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+	port, err := strconv.Atoi(source.URL[strings.LastIndex(source.URL, ":")+1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := &Agent{}
+	err = agent.runDeclaredServiceHealthCheck(context.Background(), "inst_1", admiral.ServiceHealthCheck{
+		ServiceName: "web",
+		HostPort:    port,
+		HealthCheck: admiral.YAMLHealthCheck{Type: "http", Path: "/health", ExpectedStatus: http.StatusOK},
+	})
+	if err == nil {
+		t.Fatal("expected redirect response to fail an HTTP health check")
+	}
+	if got := targetRequests.Load(); got != 0 {
+		t.Fatalf("health check followed redirect and contacted target %d times", got)
+	}
+}
