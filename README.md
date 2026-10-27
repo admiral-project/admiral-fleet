@@ -40,7 +40,7 @@ admiral-fleet
 | `ADMIRAL_FLEET_EXECUTOR` | Task executor implementation (`systemd-podman`, `simulated`) | No | `simulated` |
 | `ADMIRAL_FLEET_QUADLET_DIR` | Directory for generated Quadlet files | No | `/etc/containers/systemd/admiral` |
 | `ADMIRAL_FLEET_DATA_DIR` | Directory for local data and volumes | No | `/var/lib/admiral` |
-| `ADMIRAL_FLEET_ALLOWED_REGISTRIES` | Optional comma-separated registry allowlist; enforced only when present and non-empty | No | unset (disabled) |
+| `ADMIRAL_FLEET_ALLOWED_REGISTRIES` | Comma-separated image/credential registry allowlist | No | unset for direct runs; RPM service sets `docker.io,quay.io,registry.redhat.io` |
 | `ADMIRAL_FLEET_HTTP_ADDR` | Listen address for internal HTTP server | No | `127.0.0.1:9099` |
 | `ADMIRAL_FLEET_PUBLIC_HOST` | Public hostname or IP of this node | No | - |
 | `ADMIRAL_FLEET_PUBLIC_PORT` | Public port for reaching this node | No | - |
@@ -51,6 +51,10 @@ admiral-fleet
 | `ADMIRAL_S3_SECRET_ACCESS_KEY` | S3 secret key for backups | No* | - |
 
 \* Required if using remote backup storage.
+
+The RPM-managed `admiral-fleet.service` sets the registry allowlist shown
+above. Direct development runs leave it unset unless the operator configures
+it, which disables this second local allowlist check.
 
 > **Note:** On dedicated `--worker-node` installs the official Ansible
 > playbooks set `ADMIRAL_FLEET_HTTP_ADDR` to the node WireGuard address
