@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/healthcheck"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
@@ -261,7 +262,7 @@ func (a *Agent) checkDeclaredServiceHealth(ctx context.Context, instanceID strin
 	if err != nil {
 		return false, "failed to read declared service health checks"
 	}
-	var checks []admiral.ServiceHealthCheck
+	var checks []healthcheck.Check
 	if err := json.Unmarshal(data, &checks); err != nil {
 		return false, "failed to parse declared service health checks"
 	}
@@ -273,7 +274,7 @@ func (a *Agent) checkDeclaredServiceHealth(ctx context.Context, instanceID strin
 	return true, ""
 }
 
-func (a *Agent) runDeclaredServiceHealthCheck(ctx context.Context, instanceID string, check admiral.ServiceHealthCheck) error {
+func (a *Agent) runDeclaredServiceHealthCheck(ctx context.Context, instanceID string, check healthcheck.Check) error {
 	if strings.TrimSpace(check.ServiceName) == "" {
 		return fmt.Errorf("service name is empty")
 	}
@@ -300,7 +301,11 @@ func (a *Agent) runDeclaredServiceHealthCheck(ctx context.Context, instanceID st
 		if check.HostPort <= 0 {
 			return fmt.Errorf("TCP health check has no published port")
 		}
-		conn, err := (&net.Dialer{Timeout: timeout}).DialContext(checkCtx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(check.HostPort)))
+		host, err := a.healthCheckHost(check.HostAddress)
+		if err != nil {
+			return err
+		}
+		conn, err := (&net.Dialer{Timeout: timeout}).DialContext(checkCtx, "tcp", net.JoinHostPort(host, strconv.Itoa(check.HostPort)))
 		if err != nil {
 			return err
 		}
@@ -313,7 +318,12 @@ func (a *Agent) runDeclaredServiceHealthCheck(ctx context.Context, instanceID st
 		if path == "" {
 			path = "/"
 		}
-		request, err := http.NewRequestWithContext(checkCtx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", check.HostPort, path), nil)
+		host, err := a.healthCheckHost(check.HostAddress)
+		if err != nil {
+			return err
+		}
+		address := net.JoinHostPort(host, strconv.Itoa(check.HostPort))
+		request, err := http.NewRequestWithContext(checkCtx, http.MethodGet, fmt.Sprintf("http://%s%s", address, path), nil)
 		if err != nil {
 			return fmt.Errorf("create HTTP health check request: %w", err)
 		}
@@ -340,6 +350,27 @@ func (a *Agent) runDeclaredServiceHealthCheck(ctx context.Context, instanceID st
 	default:
 		return fmt.Errorf("unsupported health check type %q", check.HealthCheck.Type)
 	}
+}
+
+func (a *Agent) healthCheckHost(persistedAddress string) (string, error) {
+	address := strings.TrimSpace(persistedAddress)
+	if address == "" {
+		address = strings.TrimSpace(a.PublishAddress)
+	}
+	if address == "" {
+		address = "127.0.0.1"
+	}
+	ip := net.ParseIP(address)
+	if ip == nil {
+		return "", fmt.Errorf("invalid published health check address %q", address)
+	}
+	if ip.IsUnspecified() {
+		if ip.To4() != nil {
+			return "127.0.0.1", nil
+		}
+		return "::1", nil
+	}
+	return address, nil
 }
 
 func checkInstanceServiceContainers(quadletDir, instanceID string, containerStates map[string]string, inspectErr error) (bool, string) {
