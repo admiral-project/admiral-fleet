@@ -42,6 +42,7 @@ type Agent struct {
 	RootlessUser          string
 	QuadletDir            string
 	DataDir               string
+	PublishAddress        string
 	taskPublicKey         ed25519.PublicKey
 	executor              executor.Executor
 	http                  *http.Client
@@ -90,6 +91,7 @@ func New(nodeID, apiURL, fleetToken, caCertFile, outboxDir, storageCheckInterval
 		RootlessUser:          rootlessUser,
 		QuadletDir:            quadletDir,
 		DataDir:               envOrDefault("ADMIRAL_FLEET_DATA_DIR", "/var/lib/admiral"),
+		PublishAddress:        envOrDefault("ADMIRAL_FLEET_PUBLISH_ADDRESS", "127.0.0.1"),
 		taskPublicKey:         taskPublicKey,
 		executor:              exec,
 		http: &http.Client{

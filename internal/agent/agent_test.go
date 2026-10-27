@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/healthcheck"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
 )
 
@@ -1464,7 +1466,7 @@ func TestRunDeclaredServiceHTTPHealthCheck(t *testing.T) {
 				t.Fatal(err)
 			}
 			agent := &Agent{}
-			check := admiral.ServiceHealthCheck{
+			check := healthcheck.Check{
 				ServiceName: "web",
 				HostPort:    port,
 				HealthCheck: admiral.YAMLHealthCheck{Type: "http", Path: "/health", ExpectedStatus: tt.expectedStatus},
@@ -1493,7 +1495,7 @@ func TestRunDeclaredServiceHTTPHealthCheckDoesNotFollowRedirects(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent := &Agent{}
-	err = agent.runDeclaredServiceHealthCheck(context.Background(), "inst_1", admiral.ServiceHealthCheck{
+	err = agent.runDeclaredServiceHealthCheck(context.Background(), "inst_1", healthcheck.Check{
 		ServiceName: "web",
 		HostPort:    port,
 		HealthCheck: admiral.YAMLHealthCheck{Type: "http", Path: "/health", ExpectedStatus: http.StatusOK},
@@ -1503,5 +1505,76 @@ func TestRunDeclaredServiceHTTPHealthCheckDoesNotFollowRedirects(t *testing.T) {
 	}
 	if got := targetRequests.Load(); got != 0 {
 		t.Fatalf("health check followed redirect and contacted target %d times", got)
+	}
+}
+
+func TestCheckDeclaredServiceHTTPHealthCheckUsesPublishedAddressWithoutFollowingRedirects(t *testing.T) {
+	var sourceRequests atomic.Int32
+	var targetRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetRequests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		t.Fatalf("listen on published-address test host: %v", err)
+	}
+	source := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sourceRequests.Add(1)
+		http.Redirect(w, r, target.URL+"/leak", http.StatusFound)
+	}))
+	source.Listener = listener
+	source.Start()
+	defer source.Close()
+
+	host, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split published test address: %v", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatalf("parse published test port: %v", err)
+	}
+	dataDir := t.TempDir()
+	instanceDir := filepath.Join(dataDir, "instances", "inst_1")
+	if err := os.MkdirAll(instanceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	checks, err := json.Marshal([]healthcheck.Check{{
+		ServiceName: "web",
+		HealthCheck: admiral.YAMLHealthCheck{Type: "http", Path: "/health", ExpectedStatus: http.StatusFound},
+		HostAddress: host,
+		HostPort:    port,
+	}})
+	if err != nil {
+		t.Fatalf("encode persisted health check: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(instanceDir, "healthchecks.json"), checks, 0600); err != nil {
+		t.Fatalf("write persisted health check: %v", err)
+	}
+
+	agent := &Agent{DataDir: dataDir, PublishAddress: "127.0.0.1"}
+	ok, message := agent.checkDeclaredServiceHealth(context.Background(), "inst_1")
+	if !ok || message != "" {
+		t.Fatalf("declared HTTP 302 check = %t, %q; want healthy", ok, message)
+	}
+	if got := sourceRequests.Load(); got != 1 {
+		t.Fatalf("published health endpoint received %d requests, want 1", got)
+	}
+	if got := targetRequests.Load(); got != 0 {
+		t.Fatalf("periodic health check followed redirect and contacted target %d times", got)
+	}
+}
+
+func TestHealthCheckHostFallsBackToConfiguredPublishAddress(t *testing.T) {
+	agent := &Agent{PublishAddress: "10.99.0.2"}
+	got, err := agent.healthCheckHost("")
+	if err != nil {
+		t.Fatalf("resolve legacy health check address: %v", err)
+	}
+	if got != "10.99.0.2" {
+		t.Fatalf("legacy health check host = %q, want configured publish address", got)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/healthcheck"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/osutil"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/podman"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
@@ -45,7 +46,11 @@ func TestWriteServiceHealthChecksPersistsOnlyCheckMetadata(t *testing.T) {
 	if err := os.MkdirAll(instanceDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	exec := &SystemdPodmanExecutor{DataDir: dataDir, FS: osutil.RealFileSystem{}}
+	exec := &SystemdPodmanExecutor{
+		DataDir:  dataDir,
+		FS:       osutil.RealFileSystem{},
+		Renderer: &quadlet.Renderer{PublishAddress: "10.99.0.2"},
+	}
 	service := admiral.ServiceInfo{
 		Name:        "db",
 		Env:         map[string]string{"POSTGRES_PASSWORD": "do-not-persist"},
@@ -63,11 +68,12 @@ func TestWriteServiceHealthChecksPersistsOnlyCheckMetadata(t *testing.T) {
 	if string(data) == "" || strings.Contains(string(data), "do-not-persist") || strings.Contains(string(data), "also-do-not-persist") {
 		t.Fatalf("health check metadata contains secrets or is empty: %s", data)
 	}
-	var checks []admiral.ServiceHealthCheck
+	var checks []healthcheck.Check
 	if err := json.Unmarshal(data, &checks); err != nil {
 		t.Fatalf("decode health check metadata: %v", err)
 	}
-	if len(checks) != 1 || checks[0].ServiceName != "db" || checks[0].HostPort != 40001 || checks[0].HealthCheck.Type != "command" {
+	if len(checks) != 1 || checks[0].ServiceName != "db" || checks[0].HostAddress != "10.99.0.2" ||
+		checks[0].HostPort != 40001 || checks[0].HealthCheck.Type != "command" {
 		t.Fatalf("persisted checks = %#v", checks)
 	}
 	info, err := os.Stat(path)

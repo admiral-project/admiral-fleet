@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/admiral-project/admiral/admiral-fleet/internal/healthcheck"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/quadlet"
 	"github.com/admiral-project/admiral/admiral-fleet/internal/security"
 	"github.com/admiral-project/admiral/admirald/pkg/admiral"
@@ -305,15 +306,16 @@ func (e *SystemdPodmanExecutor) writeServiceHealthChecks(instanceID string, serv
 	if err := security.ValidateInstanceID(instanceID); err != nil {
 		return fmt.Errorf("invalid instance_id: %w", err)
 	}
-	checks := make([]admiral.ServiceHealthCheck, 0, len(services))
+	checks := make([]healthcheck.Check, 0, len(services))
 	for _, svc := range services {
 		if svc.HealthCheck == nil {
 			continue
 		}
 		check := *svc.HealthCheck
-		checks = append(checks, admiral.ServiceHealthCheck{
+		checks = append(checks, healthcheck.Check{
 			ServiceName: svc.Name,
 			HealthCheck: check,
+			HostAddress: e.publishedHealthcheckHost(),
 			HostPort:    hostPorts[svc.Name],
 		})
 	}
@@ -548,11 +550,15 @@ func (e *SystemdPodmanExecutor) serviceReadyCheck(ctx context.Context, instanceI
 }
 
 func (e *SystemdPodmanExecutor) publishedHealthcheckAddress(hostPort int) string {
+	return net.JoinHostPort(e.publishedHealthcheckHost(), strconv.Itoa(hostPort))
+}
+
+func (e *SystemdPodmanExecutor) publishedHealthcheckHost() string {
 	address := strings.TrimSpace(e.renderer().PublishAddress)
 	if address == "" {
 		address = "127.0.0.1"
 	}
-	return net.JoinHostPort(address, strconv.Itoa(hostPort))
+	return address
 }
 
 func extractContainerStatus(inspect []byte) string {
