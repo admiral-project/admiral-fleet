@@ -20,7 +20,7 @@ Worker agent for the Admiral PaaS platform.
 export ADMIRAL_FLEET_NODE_ID=node_001
 export ADMIRAL_FLEET_TOKEN=dev-token
 export ADMIRAL_API_URL=https://127.0.0.1:8080
-export ADMIRAL_FLEET_ROOTLESS_USER=admiral
+export ADMIRAL_FLEET_ROOTLESS_USER=admiral-apps
 export ADMIRAL_FLEET_EXECUTOR=systemd-podman
 export ADMIRAL_FLEET_QUADLET_DIR=/etc/containers/systemd/admiral
 export ADMIRAL_FLEET_DATA_DIR=/var/lib/admiral
