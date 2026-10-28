@@ -73,6 +73,7 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 			{
 				Name:  "app",
 				Image: "docker.io/traefik/whoami:v1.10",
+				User:  "1000",
 				Port:  80,
 				Env:   map[string]string{"DATABASE_HOST": "localhost"},
 			},
@@ -182,6 +183,9 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 	if !strings.Contains(got, "NoNewPrivileges=true") {
 		t.Fatalf("expected no-new-privileges in container file, got %q", got)
 	}
+	if !strings.Contains(got, "User=1000") {
+		t.Fatalf("expected container user in app Quadlet, got %q", got)
+	}
 	for _, unsafe := range []string{"Privileged=true", "Network=host", "Pid=host", "IPC=host"} {
 		if strings.Contains(got, unsafe) {
 			t.Fatalf("container must not weaken pod isolation with %q, got %q", unsafe, got)
@@ -194,6 +198,9 @@ func TestRendererWritesQuadletPodFiles(t *testing.T) {
 		t.Fatalf("read db container: %v", err)
 	}
 	dbStr := string(dbData)
+	if strings.Contains(dbStr, "User=") {
+		t.Fatalf("container user must be omitted when not configured, got %q", dbStr)
+	}
 	if !strings.Contains(dbStr, "Secret=admiral-demo001-db-POSTGRES_PASSWORD,type=env,target=POSTGRES_PASSWORD") {
 		t.Fatalf("expected Secret= for POSTGRES_PASSWORD in db container, got %q", dbStr)
 	}

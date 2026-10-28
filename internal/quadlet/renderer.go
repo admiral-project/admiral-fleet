@@ -297,6 +297,9 @@ func (r *Renderer) renderContainer(instanceID string, svc admiral.ServiceInfo, e
 	}
 	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "[Container]\nContainerName=%s\nImage=%s\n", containerName(instanceID, svc.Name), sanitizeQuadletValue(svc.Image))
+	if svc.User != "" {
+		fmt.Fprintf(&b, "User=%s\n", sanitizeQuadletValue(svc.User))
+	}
 	if svc.Command != "" {
 		fmt.Fprintf(&b, "Exec=%s\n", sanitizeQuadletValue(svc.Command))
 	}
